@@ -67,6 +67,7 @@ def fetch_daily_quotes_for_date(
         if board is None:
             continue
 
+        close = as_float(row.get("close"))
         daily_basic = daily_basic_by_code.get(ts_code, {})
         stock = basics.get(ts_code, {})
         minute_trades = daily_vwap_trade(row)
