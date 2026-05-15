@@ -92,7 +92,7 @@ def to_pick(quote: DailyQuoteIn) -> PickSnapshot:
         volume_ratio=quote.volume_ratio,
         turnover_rate=quote.turnover_rate,
         sealed_amount_wan=quote.sealed_amount_wan,
-        stop_loss_price=minute_vwap(quote.minute_trades),
+        stop_loss_price=stop_loss_price(quote),
         next_open=quote.next_open,
         future_closes=quote.future_closes,
     )
@@ -105,3 +105,10 @@ def minute_vwap(minute_trades: Sequence[MinuteTrade]) -> float:
     if total_volume > 0:
         return sum(trade.price * trade.volume for trade in minute_trades) / total_volume
     return sum(trade.price for trade in minute_trades) / len(minute_trades)
+
+
+def stop_loss_price(quote: DailyQuoteIn) -> float:
+    vwap = minute_vwap(quote.minute_trades)
+    if vwap > 0:
+        return vwap
+    return (quote.open + quote.high + quote.low + quote.close) / 4.0

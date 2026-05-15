@@ -1,0 +1,216 @@
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any
+from urllib import request
+
+from .config import settings
+from .schemas import DailyQuoteIn, MarketBoard, MinuteTrade
+
+
+logger = logging.getLogger("stock_server.tushare")
+TUSHARE_API_URL = "http://api.tushare.pro"
+
+
+class TushareError(RuntimeError):
+    pass
+
+
+def fetch_daily_quotes(trade_date: str) -> list[DailyQuoteIn]:
+    token = settings.tushare_token.strip()
+    if not token:
+        raise TushareError("TUSHARE_TOKEN is not configured.")
+
+    ts_date = to_tushare_date(trade_date)
+    basics = stock_basics(token)
+    daily_rows = call_tushare(
+        token,
+        "daily",
+        {"trade_date": ts_date},
+        "ts_code,trade_date,open,high,low,close,pre_close,pct_chg",
+    )
+    basic_rows = call_tushare(
+        token,
+        "daily_basic",
+        {"trade_date": ts_date},
+        "ts_code,turnover_rate,volume_ratio",
+    )
+    limits = fetch_limits(token, ts_date)
+    limit_ups = {ts_code for ts_code, item in limits.items() if item.get("is_up")}
+    daily_basic_by_code = {item["ts_code"]: item for item in basic_rows}
+
+    quotes: list[DailyQuoteIn] = []
+    for row in daily_rows:
+        ts_code = row["ts_code"]
+        board = board_for_ts_code(ts_code)
+        if board is None:
+            continue
+        up_limit = limits.get(ts_code, {}).get("up_limit")
+        close = as_float(row.get("close"))
+        if ts_code not in limit_ups and not is_limit_close(close, up_limit):
+            continue
+
+        daily_basic = daily_basic_by_code.get(ts_code, {})
+        stock = basics.get(ts_code, {})
+        minute_trades = fetch_minutes_for_limit_up(token, ts_code, ts_date)
+        quotes.append(
+            DailyQuoteIn(
+                trade_date=from_tushare_date(row["trade_date"]),
+                code=ts_code.split(".")[0],
+                name=str(stock.get("name") or ts_code.split(".")[0]),
+                board=board,
+                concept=str(stock.get("industry") or ""),
+                previous_close=as_float(row.get("pre_close")),
+                open=as_float(row.get("open")),
+                high=as_float(row.get("high")),
+                low=as_float(row.get("low")),
+                close=close,
+                volume_ratio=as_float(daily_basic.get("volume_ratio")),
+                turnover_rate=as_float(daily_basic.get("turnover_rate")),
+                sealed_amount_wan=sealed_amount_wan(limits.get(ts_code, {}).get("fd_amount")),
+                next_open=None,
+                future_closes=[],
+                minute_trades=minute_trades,
+            )
+        )
+
+    logger.info("fetched tushare limit-up quotes trade_date=%s count=%s", trade_date, len(quotes))
+    return quotes
+
+
+def stock_basics(token: str) -> dict[str, dict[str, Any]]:
+    rows = call_tushare(
+        token,
+        "stock_basic",
+        {"list_status": "L"},
+        "ts_code,symbol,name,market,industry",
+    )
+    return {item["ts_code"]: item for item in rows}
+
+
+def fetch_limits(token: str, ts_date: str) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    limit_price_rows = call_tushare(
+        token,
+        "stk_limit",
+        {"trade_date": ts_date},
+        "ts_code,trade_date,up_limit,down_limit",
+    )
+    for row in limit_price_rows:
+        result[row["ts_code"]] = {"up_limit": as_float(row.get("up_limit"))}
+
+    try:
+        limit_pool_rows = call_tushare(
+            token,
+            "limit_list_d",
+            {"trade_date": ts_date, "limit_type": "U"},
+            "ts_code,trade_date,limit,fd_amount",
+        )
+    except TushareError as exc:
+        logger.warning("tushare limit_list_d unavailable, fallback to stk_limit only: %s", exc)
+        limit_pool_rows = []
+
+    for row in limit_pool_rows:
+        item = result.setdefault(row["ts_code"], {})
+        item["is_up"] = str(row.get("limit") or "U").upper() == "U"
+        item["fd_amount"] = as_float(row.get("fd_amount"))
+    return result
+
+
+def fetch_minutes_for_limit_up(token: str, ts_code: str, ts_date: str) -> list[MinuteTrade]:
+    if not settings.tushare_fetch_minutes:
+        return []
+    try:
+        rows = call_tushare(
+            token,
+            "stk_mins",
+            {
+                "ts_code": ts_code,
+                "freq": "1min",
+                "start_date": f"{from_tushare_date(ts_date)} 09:00:00",
+                "end_date": f"{from_tushare_date(ts_date)} 15:30:00",
+            },
+            "ts_code,trade_time,close,vol",
+        )
+    except TushareError as exc:
+        logger.warning("tushare stk_mins unavailable for %s %s: %s", ts_code, ts_date, exc)
+        return []
+
+    trades: list[MinuteTrade] = []
+    for row in rows:
+        trade_time = str(row.get("trade_time") or "")
+        if not trade_time.startswith(from_tushare_date(ts_date)):
+            continue
+        minute = trade_time[-8:-3] if len(trade_time) >= 8 else trade_time
+        trades.append(
+            MinuteTrade(
+                minute=minute,
+                price=as_float(row.get("close")),
+                volume=int(as_float(row.get("vol"))),
+            )
+        )
+    return sorted(trades, key=lambda item: item.minute)
+
+
+def call_tushare(token: str, api_name: str, params: dict[str, Any], fields: str) -> list[dict[str, Any]]:
+    payload = json.dumps(
+        {
+            "api_name": api_name,
+            "token": token,
+            "params": params,
+            "fields": fields,
+        }
+    ).encode("utf-8")
+    http_request = request.Request(
+        TUSHARE_API_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with request.urlopen(http_request, timeout=settings.tushare_timeout_seconds) as response:
+        body = response.read().decode("utf-8")
+    parsed = json.loads(body)
+    if parsed.get("code") != 0:
+        raise TushareError(f"{api_name} failed: {parsed.get('msg') or body}")
+
+    data = parsed.get("data") or {}
+    response_fields = data.get("fields") or []
+    items = data.get("items") or []
+    return [dict(zip(response_fields, item)) for item in items]
+
+
+def board_for_ts_code(ts_code: str) -> MarketBoard | None:
+    code = ts_code.split(".")[0]
+    if code.startswith(("300", "301")):
+        return MarketBoard.chinext
+    if code.startswith(("000", "001", "002", "003", "600", "601", "603", "605")):
+        return MarketBoard.main
+    return None
+
+
+def is_limit_close(close: float, up_limit: float | None) -> bool:
+    if not up_limit:
+        return False
+    return close >= up_limit - 0.02
+
+
+def sealed_amount_wan(raw: float | None) -> float:
+    if not raw:
+        return 0.0
+    return raw / 10000.0 if raw > 100000.0 else raw
+
+
+def as_float(value: Any) -> float:
+    if value in (None, ""):
+        return 0.0
+    return float(value)
+
+
+def to_tushare_date(trade_date: str) -> str:
+    return trade_date.replace("-", "")
+
+
+def from_tushare_date(trade_date: str) -> str:
+    return f"{trade_date[0:4]}-{trade_date[4:6]}-{trade_date[6:8]}"
+

@@ -40,6 +40,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -74,8 +75,12 @@ import com.example.myapplication.market.StockSelectionEngine
 import com.example.myapplication.market.asPercent
 import com.example.myapplication.market.asPrice
 import com.example.myapplication.network.MarketApiClient
+import com.example.myapplication.storage.SelectionCache
 import com.example.myapplication.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -108,15 +113,17 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun StockApp() {
+    val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
     var selectedStock by remember { mutableStateOf<StockPick?>(null) }
     var enabledIndicators by remember { mutableStateOf(setOf("volume", "seal", "close")) }
-    val groups = remember(enabledIndicators) {
+    val localGroups = remember {
         StockSelectionEngine.selectDailyGroups(
             history = SampleMarketData.stockDays(),
-            enabledIndicatorIds = enabledIndicators
+            enabledIndicatorIds = setOf("volume", "seal", "close")
         )
     }
+    var groups by remember { mutableStateOf(SelectionCache.load(context, enabledIndicators)?.let { listOf(it) } ?: localGroups) }
 
     LaunchedEffect(selectedTab) {
         AppLogger.i("StockApp", "tab changed index=$selectedTab")
@@ -159,11 +166,23 @@ fun StockApp() {
             color = PageBackground
         ) {
             when (selectedTab) {
-                0 -> PickGroupsPage(groups, onStockClick = { selectedStock = it })
+                0 -> PickGroupsPage(
+                    groups = groups,
+                    enabledIndicators = enabledIndicators,
+                    onSelectionResult = { group ->
+                        SelectionCache.save(context, enabledIndicators, group)
+                        groups = listOf(group)
+                    },
+                    onStockClick = { selectedStock = it }
+                )
                 1 -> BacktestPage(groups)
                 else -> IndicatorsPage(
                     enabledIndicators = enabledIndicators,
-                    onChange = { enabledIndicators = it }
+                    onChange = {
+                        enabledIndicators = it
+                        groups = SelectionCache.load(context, it)?.let { cachedGroup -> listOf(cachedGroup) } ?: emptyList()
+                    },
+                    onClearData = { groups = emptyList() }
                 )
             }
         }
@@ -173,11 +192,35 @@ fun StockApp() {
 @Composable
 private fun PickGroupsPage(
     groups: List<DailyPickGroup>,
+    enabledIndicators: Set<String>,
+    onSelectionResult: (DailyPickGroup) -> Unit,
     onStockClick: (StockPick) -> Unit
 ) {
-    val dates = groups.map { it.date }
-    var selectedDate by remember(groups) { mutableStateOf(dates.firstOrNull().orEmpty()) }
-    val group = groups.firstOrNull { it.date == selectedDate } ?: groups.firstOrNull()
+    var selectedDate by remember { mutableStateOf(todayDateString()) }
+    val group = groups.firstOrNull { it.date == selectedDate }
+    var isSelecting by remember { mutableStateOf(false) }
+    var selectionError by remember { mutableStateOf<String?>(null) }
+    var selectionRequest by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(selectionRequest) {
+        if (selectionRequest == 0) return@LaunchedEffect
+        isSelecting = true
+        selectionError = null
+        try {
+            val result = MarketApiClient.runSelection(
+                tradeDate = selectedDate,
+                indicatorIds = enabledIndicators
+            )
+            selectedDate = result.date
+            onSelectionResult(result)
+            AppLogger.i("Selection", "server selection completed date=${result.date} picks=${result.picks.size} indicators=${enabledIndicators.sorted()}")
+        } catch (error: Exception) {
+            selectionError = error.message ?: "服务端选股失败"
+            AppLogger.e("Selection", "server selection failed", error)
+        } finally {
+            isSelecting = false
+        }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -191,15 +234,25 @@ private fun PickGroupsPage(
             )
         }
         item {
-            DateDropdown(
+            CalendarDateSelector(
                 title = "交易日期",
-                value = group?.date.orEmpty(),
-                options = dates,
+                value = selectedDate,
                 onSelected = {
-                    AppLogger.d("PickGroups", "date selected=$it")
+                    AppLogger.d("PickGroups", "calendar date selected=$it")
                     selectedDate = it
                 }
             )
+        }
+        item {
+            SelectionActionCard(
+                indicators = enabledIndicators,
+                selectedDate = selectedDate,
+                isSelecting = isSelecting,
+                onRun = { selectionRequest += 1 }
+            )
+        }
+        selectionError?.let { message ->
+            item { ErrorState("服务端选股失败：$message") }
         }
         group?.let { current ->
             item {
@@ -219,9 +272,9 @@ private fun PickGroupsPage(
                 )
             }
         }
-        if (groups.isEmpty()) {
+        if (group == null) {
             item {
-                EmptyState("当前指标组合没有筛出涨停股，请到指标页降低过滤条件。")
+                EmptyState("请选择日期后点击开始选股，APP 会向服务端请求该交易日的真实行情。")
             }
         }
     }
@@ -301,6 +354,66 @@ private fun StockDetailPage(
                     }
                     IntradayStopChart(pick)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SelectionActionCard(
+    indicators: Set<String>,
+    selectedDate: String,
+    isSelecting: Boolean,
+    onRun: () -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("服务端选股", color = Ink, fontWeight = FontWeight.Bold)
+                Text("日期 $selectedDate / 指标 ${indicators.sorted().joinToString()}", color = Muted, fontSize = 12.sp)
+            }
+            if (isSelecting) {
+                CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 3.dp)
+            } else {
+                TextButton(onClick = onRun) {
+                    Text("开始选股")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ClearDataCard(
+    message: String?,
+    onClear: () -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("清除本地数据", color = Ink, fontWeight = FontWeight.Bold)
+                Text(message ?: "清除 App 本地日志和缓存，减少手机空间占用。", color = Muted, fontSize = 12.sp)
+            }
+            TextButton(onClick = onClear) {
+                Text("清除")
             }
         }
     }
@@ -415,8 +528,11 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
 @Composable
 private fun IndicatorsPage(
     enabledIndicators: Set<String>,
-    onChange: (Set<String>) -> Unit
+    onChange: (Set<String>) -> Unit,
+    onClearData: () -> Unit
 ) {
+    val context = LocalContext.current
+    var clearMessage by remember { mutableStateOf<String?>(null) }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -430,6 +546,17 @@ private fun IndicatorsPage(
         }
         item {
             EmptyState("日志文件位置：${AppLogger.logDirectoryPath()}/debug-00.log。每次启动都会滚动一个新切片，最多保留 debug-00.log 到 debug-09.log。")
+        }
+        item {
+            ClearDataCard(
+                message = clearMessage,
+                onClear = {
+                    SelectionCache.clear(context)
+                    AppLogger.clearLocalData(context)
+                    onClearData()
+                    clearMessage = "本地日志和缓存已清除。"
+                }
+            )
         }
         items(IndicatorCatalog.options) { option ->
             ElevatedCard(
@@ -802,6 +929,127 @@ private fun TradeCard(trade: BacktestTrade) {
 }
 
 @Composable
+private fun CalendarDateSelector(
+    title: String,
+    value: String,
+    onSelected: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var showCalendar by remember { mutableStateOf(false) }
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { showCalendar = true },
+        color = Panel,
+        shape = RoundedCornerShape(8.dp),
+        tonalElevation = 1.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, color = Muted, fontSize = 12.sp)
+                Text(value, color = Ink, fontWeight = FontWeight.Bold)
+            }
+            Text("选择", color = ChiNextBlue, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+
+    if (showCalendar) {
+        CalendarDialog(
+            selectedDate = value,
+            onDismiss = { showCalendar = false },
+            onSelected = {
+                showCalendar = false
+                onSelected(it)
+            }
+        )
+    }
+}
+
+@Composable
+private fun CalendarDialog(
+    selectedDate: String,
+    onDismiss: () -> Unit,
+    onSelected: (String) -> Unit
+) {
+    val initial = remember(selectedDate) { calendarFromDate(selectedDate) }
+    var year by remember(selectedDate) { mutableIntStateOf(initial.get(Calendar.YEAR)) }
+    var month by remember(selectedDate) { mutableIntStateOf(initial.get(Calendar.MONTH)) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = {
+                    if (month == Calendar.JANUARY) {
+                        year -= 1
+                        month = Calendar.DECEMBER
+                    } else {
+                        month -= 1
+                    }
+                }) { Text("<") }
+                Text(
+                    "%04d-%02d".format(year, month + 1),
+                    modifier = Modifier.weight(1f),
+                    color = Ink,
+                    fontWeight = FontWeight.Bold
+                )
+                TextButton(onClick = {
+                    if (month == Calendar.DECEMBER) {
+                        year += 1
+                        month = Calendar.JANUARY
+                    } else {
+                        month += 1
+                    }
+                }) { Text(">") }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row {
+                    listOf("日", "一", "二", "三", "四", "五", "六").forEach { label ->
+                        Text(label, modifier = Modifier.weight(1f), color = Muted, fontSize = 12.sp)
+                    }
+                }
+                calendarCells(year, month).chunked(7).forEach { week ->
+                    Row {
+                        week.forEach { day ->
+                            if (day == null) {
+                                Spacer(Modifier.weight(1f))
+                            } else {
+                                val date = formatDate(year, month, day)
+                                TextButton(
+                                    modifier = Modifier.weight(1f),
+                                    onClick = { onSelected(date) }
+                                ) {
+                                    Text(
+                                        day.toString(),
+                                        color = if (date == selectedDate) RiseRed else Ink,
+                                        fontWeight = if (date == selectedDate) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSelected(todayDateString()) }) {
+                Text("今天")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
 private fun DateDropdown(
     title: String,
     value: String,
@@ -845,6 +1093,33 @@ private fun DateDropdown(
             }
         }
     }
+}
+
+private fun todayDateString(): String {
+    return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().time)
+}
+
+private fun calendarFromDate(value: String): Calendar {
+    val calendar = Calendar.getInstance()
+    runCatching {
+        SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(value)
+    }.getOrNull()?.let { calendar.time = it }
+    return calendar
+}
+
+private fun calendarCells(year: Int, month: Int): List<Int?> {
+    val calendar = Calendar.getInstance().apply {
+        set(Calendar.YEAR, year)
+        set(Calendar.MONTH, month)
+        set(Calendar.DAY_OF_MONTH, 1)
+    }
+    val offset = calendar.get(Calendar.DAY_OF_WEEK) - Calendar.SUNDAY
+    val maxDay = calendar.getActualMaximum(Calendar.DAY_OF_MONTH)
+    return List(offset) { null } + (1..maxDay).toList()
+}
+
+private fun formatDate(year: Int, month: Int, day: Int): String {
+    return "%04d-%02d-%02d".format(year, month + 1, day)
 }
 
 @Composable

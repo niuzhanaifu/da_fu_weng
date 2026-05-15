@@ -89,6 +89,11 @@ class DailyGroupOut(BaseModel):
     picks: List[StockPickOut]
 
 
+class SelectionRequest(BaseModel):
+    trade_date: Optional[str] = None
+    indicator_ids: List[str] = Field(default_factory=lambda: ["volume", "seal", "close"])
+
+
 class BacktestRequest(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None

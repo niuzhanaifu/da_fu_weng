@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import logging
-from logging.handlers import RotatingFileHandler
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -10,6 +7,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from . import __version__
 from .config import settings
 from .db import get_db, init_db
+from .logging_config import configure_logging
 from .repository import load_daily_candles, upsert_daily_quotes
 from .sample_data import sample_quotes
 from .schemas import (
@@ -19,10 +17,14 @@ from .schemas import (
     DailyGroupOut,
     DailyQuoteIn,
     IndicatorOption,
+    SelectionRequest,
     SelectionRunOut,
 )
-from .service import DEFAULT_INDICATORS, get_group, run_daily_selection, run_saved_backtest
+from .service import DEFAULT_INDICATORS, get_group, run_daily_selection, run_saved_backtest, run_selection_group
 from .strategy import INDICATORS
+from .tushare_provider import TushareError, fetch_daily_quotes
+
+import logging
 
 logger = logging.getLogger("stock_server")
 
@@ -69,6 +71,20 @@ def create_app() -> FastAPI:
         logger.info("seeded sample quotes count=%s", count)
         return {"count": count}
 
+    @app.post("/api/v1/admin/import-tushare", response_model=dict[str, int])
+    def import_tushare(
+        _: Annotated[None, Depends(require_admin)],
+        trade_date: str = Query(...),
+        conn=Depends(get_db),
+    ) -> dict[str, int]:
+        try:
+            quotes = fetch_daily_quotes(trade_date)
+        except TushareError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        count = upsert_daily_quotes(conn, quotes)
+        logger.info("imported tushare quotes trade_date=%s count=%s", trade_date, count)
+        return {"count": count}
+
     @app.post("/api/v1/admin/run-daily-selection", response_model=SelectionRunOut)
     def run_selection(
         _: Annotated[None, Depends(require_admin)],
@@ -78,7 +94,7 @@ def create_app() -> FastAPI:
     ) -> SelectionRunOut:
         try:
             result = run_daily_selection(conn, trade_date, indicator_ids or DEFAULT_INDICATORS)
-        except ValueError as exc:
+        except (ValueError, TushareError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         logger.info(
             "selection run trade_date=%s run_id=%s picks=%s indicators=%s",
@@ -101,6 +117,20 @@ def create_app() -> FastAPI:
         group = get_group(conn, trade_date)
         if not group:
             raise HTTPException(status_code=404, detail="No selection run found for date.")
+        return group
+
+    @app.post("/api/v1/selections/run", response_model=DailyGroupOut)
+    def run_public_selection(request: SelectionRequest, conn=Depends(get_db)) -> DailyGroupOut:
+        try:
+            group = run_selection_group(conn, request.trade_date, request.indicator_ids)
+        except (ValueError, TushareError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.info(
+            "public selection trade_date=%s indicators=%s picks=%s",
+            group.trade_date,
+            group.indicator_ids,
+            len(group.picks),
+        )
         return group
 
     @app.get("/api/v1/stocks/{code}/candles", response_model=list[DailyCandleOut])
@@ -138,18 +168,6 @@ def create_app() -> FastAPI:
 def require_admin(x_admin_token: Annotated[str | None, Header()] = None) -> None:
     if x_admin_token != settings.admin_token:
         raise HTTPException(status_code=401, detail="Invalid admin token.")
-
-
-def configure_logging() -> None:
-    if logger.handlers:
-        return
-    Path("logs").mkdir(exist_ok=True)
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    file_handler = RotatingFileHandler("logs/server.log", maxBytes=5 * 1024 * 1024, backupCount=10)
-    file_handler.setFormatter(formatter)
-    logging.basicConfig(level=logging.INFO, handlers=[stream_handler, file_handler])
 
 
 app = create_app()

@@ -10,6 +10,7 @@ from .repository import upsert_daily_quotes
 from .sample_data import sample_quotes
 from .schemas import DailyQuoteIn, MarketBoard, MinuteTrade
 from .service import DEFAULT_INDICATORS, run_daily_selection
+from .tushare_provider import fetch_daily_quotes
 
 
 def main() -> None:
@@ -22,6 +23,9 @@ def main() -> None:
     daily = subparsers.add_parser("run-daily-selection")
     daily.add_argument("--date", dest="trade_date", default=None)
     daily.add_argument("--indicators", default=",".join(DEFAULT_INDICATORS))
+
+    tushare_parser = subparsers.add_parser("import-tushare")
+    tushare_parser.add_argument("--date", dest="trade_date", required=True)
 
     csv_parser = subparsers.add_parser("import-csv")
     csv_parser.add_argument("path")
@@ -41,6 +45,10 @@ def main() -> None:
             indicators = [item for item in args.indicators.split(",") if item]
             result = run_daily_selection(conn, args.trade_date, indicators)
             print(json.dumps(result.model_dump(), ensure_ascii=False, indent=2))
+        elif args.command == "import-tushare":
+            quotes = fetch_daily_quotes(args.trade_date)
+            count = upsert_daily_quotes(conn, quotes)
+            print(f"imported {count} tushare quotes")
         elif args.command == "import-csv":
             quotes = load_quotes_from_csv(Path(args.path))
             count = upsert_daily_quotes(conn, quotes)

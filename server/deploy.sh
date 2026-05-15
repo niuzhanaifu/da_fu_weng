@@ -6,8 +6,16 @@ APP_DIR="${APP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 HOST="${DAFUWENG_HOST:-0.0.0.0}"
 PORT="${DAFUWENG_PORT:-8000}"
 DB_PATH="${DAFUWENG_DB_PATH:-${APP_DIR}/data/dafuweng.sqlite3}"
-ADMIN_TOKEN="${DAFUWENG_ADMIN_TOKEN:-}"
+INPUT_ADMIN_TOKEN="${DAFUWENG_ADMIN_TOKEN:-}"
+INPUT_TUSHARE_TOKEN="${TUSHARE_TOKEN:-}"
+INPUT_TUSHARE_FETCH_MINUTES="${TUSHARE_FETCH_MINUTES:-}"
+INPUT_TUSHARE_TIMEOUT_SECONDS="${TUSHARE_TIMEOUT_SECONDS:-}"
+ADMIN_TOKEN="${INPUT_ADMIN_TOKEN}"
+TUSHARE_TOKEN="${INPUT_TUSHARE_TOKEN}"
+TUSHARE_FETCH_MINUTES="${TUSHARE_FETCH_MINUTES:-1}"
+TUSHARE_TIMEOUT_SECONDS="${TUSHARE_TIMEOUT_SECONDS:-30}"
 SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
+AUTO_PULL="${AUTO_PULL:-1}"
 
 log() {
   printf '\n[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -21,6 +29,18 @@ require_linux() {
 }
 
 ensure_admin_token() {
+  if [[ -f "${APP_DIR}/.env" ]]; then
+    # shellcheck disable=SC1091
+    source "${APP_DIR}/.env"
+    DB_PATH="${DAFUWENG_DB_PATH:-${DB_PATH}}"
+    HOST="${DAFUWENG_HOST:-${HOST}}"
+    PORT="${DAFUWENG_PORT:-${PORT}}"
+    ADMIN_TOKEN="${INPUT_ADMIN_TOKEN:-${DAFUWENG_ADMIN_TOKEN:-${ADMIN_TOKEN}}}"
+    TUSHARE_TOKEN="${INPUT_TUSHARE_TOKEN:-${TUSHARE_TOKEN:-}}"
+    TUSHARE_FETCH_MINUTES="${INPUT_TUSHARE_FETCH_MINUTES:-${TUSHARE_FETCH_MINUTES:-1}}"
+    TUSHARE_TIMEOUT_SECONDS="${INPUT_TUSHARE_TIMEOUT_SECONDS:-${TUSHARE_TIMEOUT_SECONDS:-30}}"
+  fi
+
   if [[ -z "${ADMIN_TOKEN}" ]]; then
     if command -v openssl >/dev/null 2>&1; then
       ADMIN_TOKEN="$(openssl rand -hex 24)"
@@ -30,17 +50,37 @@ ensure_admin_token() {
   fi
 }
 
+pull_latest_code() {
+  if [[ "${AUTO_PULL}" == "0" ]]; then
+    log "AUTO_PULL=0, skipping git pull."
+    return
+  fi
+
+  local repo_dir
+  if [[ -d "$(cd "${APP_DIR}/.." && pwd)/.git" ]]; then
+    repo_dir="$(cd "${APP_DIR}/.." && pwd)"
+  elif [[ -d "${APP_DIR}/.git" ]]; then
+    repo_dir="${APP_DIR}"
+  else
+    log "No git repository found for ${APP_DIR}. Skipping git pull."
+    return
+  fi
+
+  log "Pulling latest code in ${repo_dir}"
+  git -C "${repo_dir}" pull --ff-only
+}
+
 install_system_packages() {
   if command -v apt-get >/dev/null 2>&1; then
     log "Installing system packages with apt-get"
     sudo apt-get update
-    sudo apt-get install -y python3 python3-venv python3-pip curl
+    sudo apt-get install -y python3 python3-venv python3-pip curl git
   elif command -v dnf >/dev/null 2>&1; then
     log "Installing system packages with dnf"
-    sudo dnf install -y python3 python3-pip curl
+    sudo dnf install -y python3 python3-pip curl git
   elif command -v yum >/dev/null 2>&1; then
     log "Installing system packages with yum"
-    sudo yum install -y python3 python3-pip curl
+    sudo yum install -y python3 python3-pip curl git
   else
     log "No supported package manager found. Assuming python3, venv, pip and curl are installed."
   fi
@@ -54,6 +94,9 @@ DAFUWENG_DB_PATH=${DB_PATH}
 DAFUWENG_ADMIN_TOKEN=${ADMIN_TOKEN}
 DAFUWENG_HOST=${HOST}
 DAFUWENG_PORT=${PORT}
+TUSHARE_TOKEN=${TUSHARE_TOKEN}
+TUSHARE_FETCH_MINUTES=${TUSHARE_FETCH_MINUTES}
+TUSHARE_TIMEOUT_SECONDS=${TUSHARE_TIMEOUT_SECONDS}
 EOF
   chmod 600 "${APP_DIR}/.env"
 }
@@ -79,7 +122,7 @@ initialize_database() {
   set +a
   python -m stock_server.jobs init-db
 
-  if [[ "${SEED_SAMPLE:-1}" == "1" ]]; then
+  if [[ "${SEED_SAMPLE:-0}" == "1" ]]; then
     log "Seeding sample data and running sample selection"
     python -m stock_server.jobs seed-sample
     python -m stock_server.jobs run-daily-selection --date 2026-05-14
@@ -105,7 +148,8 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
   sudo systemctl daemon-reload
-  sudo systemctl enable --now "${APP_NAME}"
+  sudo systemctl enable "${APP_NAME}"
+  sudo systemctl restart "${APP_NAME}"
 }
 
 health_check() {
@@ -125,8 +169,9 @@ health_check() {
 
 main() {
   require_linux
-  ensure_admin_token
   install_system_packages
+  pull_latest_code
+  ensure_admin_token
   write_env_file
   install_python_dependencies
   initialize_database

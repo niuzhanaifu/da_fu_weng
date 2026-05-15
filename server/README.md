@@ -9,7 +9,7 @@
 - 提供回测接口
 - 提供安卓端可直接调用的 JSON API
 
-当前没有硬绑定第三方行情接口。真实行情可以通过 `/api/v1/admin/quotes` 写入，或用 `python -m stock_server.jobs import-csv` 导入。后续确定使用 Tushare、AkShare、东方财富或自有行情库后，只需要补一个数据 provider。
+当前已接入 Tushare。服务端读取 `TUSHARE_TOKEN`，在选股请求指定日期且本地没有行情时，会自动拉取该交易日主板和创业板涨停股所需数据并保存。
 
 ## 本地启动
 
@@ -20,6 +20,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 export DAFUWENG_ADMIN_TOKEN=change-me
+export TUSHARE_TOKEN=your-token
 python -m stock_server.jobs init-db
 python -m stock_server.jobs seed-sample
 python -m stock_server.jobs run-daily-selection --date 2026-05-14
@@ -34,6 +35,14 @@ curl http://127.0.0.1:8000/api/v1/indicators
 curl http://127.0.0.1:8000/api/v1/backtest-strategies
 curl http://127.0.0.1:8000/api/v1/groups/latest
 curl "http://127.0.0.1:8000/api/v1/stocks/600536/candles?limit=120"
+```
+
+指定日期触发服务端选股：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/selections/run \
+  -H "Content-Type: application/json" \
+  -d '{"trade_date":"2026-05-15","indicator_ids":["volume","seal","close"]}'
 ```
 
 回测：
@@ -80,6 +89,12 @@ CSV 导入：
 
 ```bash
 python -m stock_server.jobs import-csv data/sample_quotes.csv
+```
+
+Tushare 导入：
+
+```bash
+python -m stock_server.jobs import-tushare --date 2026-05-15
 ```
 
 CSV 字段见 `data/sample_quotes.csv`。其中：
@@ -134,6 +149,7 @@ tail -f /opt/dafuweng/server/logs/server.log
 - `GET /api/v1/backtest-strategies`
 - `GET /api/v1/groups/latest`
 - `GET /api/v1/groups/{trade_date}`
+- `POST /api/v1/selections/run`
 - `GET /api/v1/stocks/{code}/candles`
 - `POST /api/v1/backtests`
 - `POST /api/v1/admin/quotes`

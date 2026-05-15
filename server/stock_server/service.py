@@ -8,6 +8,7 @@ from . import repository
 from .backtest import run_backtest
 from .schemas import BacktestRequest, BacktestResultOut, DailyGroupOut, SelectionRunOut
 from .strategy import select_limit_up
+from .tushare_provider import fetch_daily_quotes
 
 
 DEFAULT_INDICATORS = ["volume", "seal", "close"]
@@ -24,6 +25,13 @@ def run_daily_selection(
 
     indicators = list(indicator_ids or DEFAULT_INDICATORS)
     quotes = repository.load_quotes(conn, selected_date)
+    if not quotes:
+        imported = fetch_daily_quotes(selected_date)
+        if not imported:
+            raise ValueError(f"No Tushare quotes found for {selected_date}.")
+        repository.upsert_daily_quotes(conn, imported)
+        quotes = repository.load_quotes(conn, selected_date)
+
     picks = select_limit_up(quotes, indicators)
     run_id, generated_at = repository.save_selection_run(conn, selected_date, indicators, picks)
     return SelectionRunOut(
@@ -48,6 +56,18 @@ def get_group(conn: sqlite3.Connection, trade_date: str | None = None) -> DailyG
         chinext_count=sum(1 for pick in picks if pick.board.value == "chinext"),
         picks=picks,
     )
+
+
+def run_selection_group(
+    conn: sqlite3.Connection,
+    trade_date: str | None,
+    indicator_ids: Sequence[str] | None = None,
+) -> DailyGroupOut:
+    run = run_daily_selection(conn, trade_date, indicator_ids)
+    group = get_group(conn, run.trade_date)
+    if group is None:
+        raise ValueError("Selection completed but no group was saved.")
+    return group
 
 
 def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> BacktestResultOut:

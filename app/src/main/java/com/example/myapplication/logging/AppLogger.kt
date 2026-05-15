@@ -42,6 +42,23 @@ object AppLogger {
 
     fun logDirectoryPath(): String = logsDir?.absolutePath.orEmpty()
 
+    fun clearLocalData(context: Context) {
+        synchronized(lock) {
+            writer?.flush()
+            writer?.close()
+            writer = null
+
+            context.cacheDir.deleteRecursively()
+            File(context.filesDir, "logs").deleteRecursively()
+
+            val dir = File(context.filesDir, "logs").apply { mkdirs() }
+            logsDir = dir
+            writer = File(dir, CURRENT_LOG_NAME).outputStream().bufferedWriter(Charsets.UTF_8)
+            initialized = true
+            i("AppLogger", "Local logs and cache cleared. dir=${dir.absolutePath}")
+        }
+    }
+
     fun d(tag: String, message: String) {
         Log.d(tag, message)
         write("DEBUG", tag, message, null)
