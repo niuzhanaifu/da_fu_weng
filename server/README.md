@@ -9,7 +9,7 @@
 - 提供回测接口
 - 提供安卓端可直接调用的 JSON API
 
-当前已接入 Tushare。服务端读取 `TUSHARE_TOKEN`，在选股请求指定日期且本地没有行情时，会自动拉取该交易日主板和创业板涨停股所需数据并保存。
+当前已接入 Tushare。服务端读取 `TUSHARE_TOKEN`，在选股请求指定日期且本地没有行情时，会自动拉取历史日线并保存。默认不批量拉取 `stk_mins` 分钟线，避免触发 Tushare 低频接口限制；涨停当日成交均价优先用日线 `amount / vol` 换算得到，需要分钟线止损时再设置 `TUSHARE_FETCH_MINUTES=1`。
 
 ## 本地启动
 
@@ -97,6 +97,14 @@ Tushare 导入：
 python -m stock_server.jobs import-tushare --date 2026-05-15
 ```
 
+同步一个区间的历史日线：
+
+```bash
+python -m stock_server.jobs sync-tushare --start-date 2026-02-15 --end-date 2026-05-15
+```
+
+同步逻辑会拉取 `trade_cal`、`daily` 和 `daily_basic`，把主板、创业板历史日线落到 SQLite。选股和回测优先使用本地数据库；只有指定日期本地数据不存在或明显不完整时，才会补拉最近约三个月数据。
+
 CSV 字段见 `data/sample_quotes.csv`。其中：
 
 - `board` 使用 `main` 或 `chinext`
@@ -118,10 +126,10 @@ curl -X POST "http://127.0.0.1:8000/api/v1/admin/run-daily-selection?trade_date=
   -H "X-Admin-Token: change-me"
 ```
 
-Linux crontab 示例，交易日 15:30 执行：
+部署脚本会自动安装 crontab，交易日 17:00 同步当天数据并执行当天选股：
 
 ```cron
-30 15 * * 1-5 cd /opt/dafuweng/server && . .venv/bin/activate && python -m stock_server.jobs run-daily-selection >> logs/cron.log 2>&1
+0 17 * * 1-5 cd /opt/dafuweng/server && . .venv/bin/activate && set -a && . .env && set +a && python -m stock_server.jobs sync-tushare --start-date $(date +\%F) --end-date $(date +\%F) && python -m stock_server.jobs run-daily-selection --date $(date +\%F) >> logs/cron.log 2>&1
 ```
 
 ## systemd 部署
@@ -154,6 +162,7 @@ tail -f /opt/dafuweng/server/logs/server.log
 - `POST /api/v1/backtests`
 - `POST /api/v1/admin/quotes`
 - `POST /api/v1/admin/seed-sample`
+- `POST /api/v1/admin/sync-tushare`
 - `POST /api/v1/admin/run-daily-selection`
 
 ## 老猫战法

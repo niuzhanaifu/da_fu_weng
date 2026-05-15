@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 from urllib import request
 
@@ -18,17 +19,38 @@ class TushareError(RuntimeError):
 
 
 def fetch_daily_quotes(trade_date: str) -> list[DailyQuoteIn]:
+    return fetch_daily_quotes_range(trade_date, trade_date)
+
+
+def fetch_daily_quotes_range(start_date: str, end_date: str) -> list[DailyQuoteIn]:
     token = settings.tushare_token.strip()
     if not token:
         raise TushareError("TUSHARE_TOKEN is not configured.")
 
-    ts_date = to_tushare_date(trade_date)
     basics = stock_basics(token)
+    quotes: list[DailyQuoteIn] = []
+    for ts_date in open_trade_dates(token, to_tushare_date(start_date), to_tushare_date(end_date)):
+        quotes.extend(fetch_daily_quotes_for_date(token, basics, ts_date))
+
+    logger.info(
+        "fetched tushare daily quotes start_date=%s end_date=%s count=%s",
+        start_date,
+        end_date,
+        len(quotes),
+    )
+    return quotes
+
+
+def fetch_daily_quotes_for_date(
+    token: str,
+    basics: dict[str, dict[str, Any]],
+    ts_date: str,
+) -> list[DailyQuoteIn]:
     daily_rows = call_tushare(
         token,
         "daily",
         {"trade_date": ts_date},
-        "ts_code,trade_date,open,high,low,close,pre_close,pct_chg",
+        "ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
     )
     basic_rows = call_tushare(
         token,
@@ -36,8 +58,6 @@ def fetch_daily_quotes(trade_date: str) -> list[DailyQuoteIn]:
         {"trade_date": ts_date},
         "ts_code,turnover_rate,volume_ratio",
     )
-    limits = fetch_limits(token, ts_date)
-    limit_ups = {ts_code for ts_code, item in limits.items() if item.get("is_up")}
     daily_basic_by_code = {item["ts_code"]: item for item in basic_rows}
 
     quotes: list[DailyQuoteIn] = []
@@ -46,14 +66,12 @@ def fetch_daily_quotes(trade_date: str) -> list[DailyQuoteIn]:
         board = board_for_ts_code(ts_code)
         if board is None:
             continue
-        up_limit = limits.get(ts_code, {}).get("up_limit")
-        close = as_float(row.get("close"))
-        if ts_code not in limit_ups and not is_limit_close(close, up_limit):
-            continue
 
         daily_basic = daily_basic_by_code.get(ts_code, {})
         stock = basics.get(ts_code, {})
-        minute_trades = fetch_minutes_for_limit_up(token, ts_code, ts_date)
+        minute_trades = daily_vwap_trade(row)
+        if settings.tushare_fetch_minutes and is_limit_up_row(row, board):
+            minute_trades = fetch_minutes_for_limit_up(token, ts_code, ts_date) or minute_trades
         quotes.append(
             DailyQuoteIn(
                 trade_date=from_tushare_date(row["trade_date"]),
@@ -68,15 +86,29 @@ def fetch_daily_quotes(trade_date: str) -> list[DailyQuoteIn]:
                 close=close,
                 volume_ratio=as_float(daily_basic.get("volume_ratio")),
                 turnover_rate=as_float(daily_basic.get("turnover_rate")),
-                sealed_amount_wan=sealed_amount_wan(limits.get(ts_code, {}).get("fd_amount")),
+                sealed_amount_wan=0.0,
                 next_open=None,
                 future_closes=[],
                 minute_trades=minute_trades,
             )
         )
 
-    logger.info("fetched tushare limit-up quotes trade_date=%s count=%s", trade_date, len(quotes))
+    logger.info("fetched tushare daily quotes trade_date=%s count=%s", from_tushare_date(ts_date), len(quotes))
     return quotes
+
+
+def open_trade_dates(token: str, start_date: str, end_date: str) -> list[str]:
+    try:
+        rows = call_tushare(
+            token,
+            "trade_cal",
+            {"exchange": "", "start_date": start_date, "end_date": end_date, "is_open": "1"},
+            "cal_date,is_open",
+        )
+    except TushareError as exc:
+        logger.warning("tushare trade_cal unavailable, fallback to calendar days: %s", exc)
+        return calendar_dates(start_date, end_date)
+    return [str(row["cal_date"]) for row in rows if str(row.get("is_open")) == "1"]
 
 
 def stock_basics(token: str) -> dict[str, dict[str, Any]]:
@@ -201,6 +233,23 @@ def sealed_amount_wan(raw: float | None) -> float:
     return raw / 10000.0 if raw > 100000.0 else raw
 
 
+def daily_vwap_trade(row: dict[str, Any]) -> list[MinuteTrade]:
+    volume_hands = as_float(row.get("vol"))
+    amount_thousand_yuan = as_float(row.get("amount"))
+    if volume_hands <= 0 or amount_thousand_yuan <= 0:
+        return []
+    price = amount_thousand_yuan * 10.0 / volume_hands
+    return [MinuteTrade(minute="daily", price=price, volume=int(volume_hands))]
+
+
+def is_limit_up_row(row: dict[str, Any], board: MarketBoard) -> bool:
+    previous_close = as_float(row.get("pre_close"))
+    close = as_float(row.get("close"))
+    high = as_float(row.get("high"))
+    expected = previous_close * (1.0 + board.limit_up_rate)
+    return close >= expected - 0.02 and close >= high - 0.02
+
+
 def as_float(value: Any) -> float:
     if value in (None, ""):
         return 0.0
@@ -214,3 +263,12 @@ def to_tushare_date(trade_date: str) -> str:
 def from_tushare_date(trade_date: str) -> str:
     return f"{trade_date[0:4]}-{trade_date[4:6]}-{trade_date[6:8]}"
 
+
+def calendar_dates(start_date: str, end_date: str) -> list[str]:
+    current = datetime.strptime(start_date, "%Y%m%d")
+    end = datetime.strptime(end_date, "%Y%m%d")
+    dates: list[str] = []
+    while current <= end:
+        dates.append(current.strftime("%Y%m%d"))
+        current += timedelta(days=1)
+    return dates

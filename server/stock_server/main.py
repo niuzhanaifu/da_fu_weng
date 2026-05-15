@@ -20,7 +20,7 @@ from .schemas import (
     SelectionRequest,
     SelectionRunOut,
 )
-from .service import DEFAULT_INDICATORS, get_group, run_daily_selection, run_saved_backtest, run_selection_group
+from .service import DEFAULT_INDICATORS, get_group, run_daily_selection, run_saved_backtest, run_selection_group, sync_tushare_quotes
 from .strategy import INDICATORS
 from .tushare_provider import TushareError, fetch_daily_quotes
 
@@ -84,6 +84,20 @@ def create_app() -> FastAPI:
         count = upsert_daily_quotes(conn, quotes)
         logger.info("imported tushare quotes trade_date=%s count=%s", trade_date, count)
         return {"count": count}
+
+    @app.post("/api/v1/admin/sync-tushare", response_model=dict[str, int | str])
+    def sync_tushare(
+        _: Annotated[None, Depends(require_admin)],
+        start_date: str = Query(...),
+        end_date: str = Query(...),
+        conn=Depends(get_db),
+    ) -> dict[str, int | str]:
+        try:
+            count = sync_tushare_quotes(conn, start_date, end_date)
+        except TushareError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.info("synced tushare quotes start_date=%s end_date=%s count=%s", start_date, end_date, count)
+        return {"start_date": start_date, "end_date": end_date, "count": count}
 
     @app.post("/api/v1/admin/run-daily-selection", response_model=SelectionRunOut)
     def run_selection(

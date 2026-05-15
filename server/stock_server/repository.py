@@ -84,9 +84,57 @@ def load_quotes(conn: sqlite3.Connection, trade_date: str) -> list[DailyQuoteIn]
     return [row_to_quote(conn, row) for row in rows]
 
 
+def count_quotes(conn: sqlite3.Connection, trade_date: str) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS count FROM daily_quotes WHERE trade_date = ?",
+        (trade_date,),
+    ).fetchone()
+    return int(row["count"]) if row else 0
+
+
 def latest_quote_date(conn: sqlite3.Connection) -> str | None:
     row = conn.execute("SELECT MAX(trade_date) AS trade_date FROM daily_quotes").fetchone()
     return row["trade_date"] if row else None
+
+
+def quote_dates_between(
+    conn: sqlite3.Connection,
+    start_date: str | None,
+    end_date: str | None,
+) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT DISTINCT trade_date
+        FROM daily_quotes
+        WHERE (? IS NULL OR trade_date >= ?)
+          AND (? IS NULL OR trade_date <= ?)
+        ORDER BY trade_date ASC
+        """,
+        (start_date, start_date, end_date, end_date),
+    ).fetchall()
+    return [row["trade_date"] for row in rows]
+
+
+def future_prices(
+    conn: sqlite3.Connection,
+    code: str,
+    trade_date: str,
+    limit: int,
+) -> tuple[float | None, list[float]]:
+    rows = conn.execute(
+        """
+        SELECT open, close
+        FROM daily_quotes
+        WHERE code = ?
+          AND trade_date > ?
+        ORDER BY trade_date ASC
+        LIMIT ?
+        """,
+        (code, trade_date, max(1, limit)),
+    ).fetchall()
+    next_open = rows[0]["open"] if rows else None
+    future_closes = [row["close"] for row in rows]
+    return next_open, future_closes
 
 
 def save_selection_run(

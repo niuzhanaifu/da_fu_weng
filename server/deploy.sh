@@ -12,7 +12,7 @@ INPUT_TUSHARE_FETCH_MINUTES="${TUSHARE_FETCH_MINUTES:-}"
 INPUT_TUSHARE_TIMEOUT_SECONDS="${TUSHARE_TIMEOUT_SECONDS:-}"
 ADMIN_TOKEN="${INPUT_ADMIN_TOKEN}"
 TUSHARE_TOKEN="${INPUT_TUSHARE_TOKEN}"
-TUSHARE_FETCH_MINUTES="${TUSHARE_FETCH_MINUTES:-1}"
+TUSHARE_FETCH_MINUTES="${TUSHARE_FETCH_MINUTES:-0}"
 TUSHARE_TIMEOUT_SECONDS="${TUSHARE_TIMEOUT_SECONDS:-30}"
 SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
 AUTO_PULL="${AUTO_PULL:-1}"
@@ -37,7 +37,7 @@ ensure_admin_token() {
     PORT="${DAFUWENG_PORT:-${PORT}}"
     ADMIN_TOKEN="${INPUT_ADMIN_TOKEN:-${DAFUWENG_ADMIN_TOKEN:-${ADMIN_TOKEN}}}"
     TUSHARE_TOKEN="${INPUT_TUSHARE_TOKEN:-${TUSHARE_TOKEN:-}}"
-    TUSHARE_FETCH_MINUTES="${INPUT_TUSHARE_FETCH_MINUTES:-${TUSHARE_FETCH_MINUTES:-1}}"
+    TUSHARE_FETCH_MINUTES="${INPUT_TUSHARE_FETCH_MINUTES:-${TUSHARE_FETCH_MINUTES:-0}}"
     TUSHARE_TIMEOUT_SECONDS="${INPUT_TUSHARE_TIMEOUT_SECONDS:-${TUSHARE_TIMEOUT_SECONDS:-30}}"
   fi
 
@@ -74,13 +74,13 @@ install_system_packages() {
   if command -v apt-get >/dev/null 2>&1; then
     log "Installing system packages with apt-get"
     sudo apt-get update
-    sudo apt-get install -y python3 python3-venv python3-pip curl git
+    sudo apt-get install -y python3 python3-venv python3-pip curl git cron
   elif command -v dnf >/dev/null 2>&1; then
     log "Installing system packages with dnf"
-    sudo dnf install -y python3 python3-pip curl git
+    sudo dnf install -y python3 python3-pip curl git cronie
   elif command -v yum >/dev/null 2>&1; then
     log "Installing system packages with yum"
-    sudo yum install -y python3 python3-pip curl git
+    sudo yum install -y python3 python3-pip curl git cronie
   else
     log "No supported package manager found. Assuming python3, venv, pip and curl are installed."
   fi
@@ -152,6 +152,31 @@ EOF
   sudo systemctl restart "${APP_NAME}"
 }
 
+install_daily_sync_cron() {
+  log "Installing daily Tushare sync cron at 17:00"
+  mkdir -p "${APP_DIR}/logs"
+
+  local marker_start="# dafu-weng daily-sync start"
+  local marker_end="# dafu-weng daily-sync end"
+  local cron_line="0 17 * * 1-5 cd ${APP_DIR} && . .venv/bin/activate && set -a && . .env && set +a && python -m stock_server.jobs sync-tushare --start-date \$(date +\\%F) --end-date \$(date +\\%F) && python -m stock_server.jobs run-daily-selection --date \$(date +\\%F) >> logs/cron.log 2>&1"
+  local current_cron
+
+  current_cron="$(mktemp)"
+  crontab -l > "${current_cron}" 2>/dev/null || true
+  sed -i "/${marker_start}/,/${marker_end}/d" "${current_cron}"
+  {
+    cat "${current_cron}"
+    echo "${marker_start}"
+    echo "${cron_line}"
+    echo "${marker_end}"
+  } | crontab -
+  rm -f "${current_cron}"
+
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl enable --now cron 2>/dev/null || sudo systemctl enable --now crond 2>/dev/null || true
+  fi
+}
+
 health_check() {
   log "Checking service health"
   sleep 2
@@ -176,6 +201,7 @@ main() {
   install_python_dependencies
   initialize_database
   write_systemd_service
+  install_daily_sync_cron
   health_check
 }
 

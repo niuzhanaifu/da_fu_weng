@@ -19,7 +19,8 @@ Defaults:
 - Port: `8000`
 - DB: `server/data/dafuweng.sqlite3`
 - systemd service: `dafuweng-stock`
-- `SEED_SAMPLE=1` seeds sample data and runs sample selection
+- `SEED_SAMPLE=0` by default. Set `SEED_SAMPLE=1` to seed sample data and run sample selection
+- Installs a weekday 17:00 cron job to sync the current trade date and run daily selection
 
 Deploy without sample data:
 
@@ -95,6 +96,8 @@ Runtime log files are written with size-based rotation:
 
 Set `TUSHARE_TOKEN` in `server/.env` or pass it into `deploy.sh`. After deployment, importing one trade date can be tested with:
 
+`TUSHARE_FETCH_MINUTES` defaults to `0` because Tushare `stk_mins` is heavily rate-limited. Keep it disabled for daily selection unless you have enough minute-data quota.
+
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/v1/admin/import-tushare?trade_date=2026-05-15" \
   -H "X-Admin-Token: your-admin-token"
@@ -106,4 +109,18 @@ The public selection endpoint also imports from Tushare automatically when local
 curl -X POST http://127.0.0.1:8000/api/v1/selections/run \
   -H "Content-Type: application/json" \
   -d '{"trade_date":"2026-05-15","indicator_ids":["volume","seal","close"]}'
+```
+
+For backtesting, preload about three months of daily data so the server does not download during each run:
+
+```bash
+cd /opt/dafuweng/server
+. .venv/bin/activate
+python -m stock_server.jobs sync-tushare --start-date 2026-02-15 --end-date 2026-05-15
+```
+
+`deploy.sh` installs this daily cron automatically:
+
+```cron
+0 17 * * 1-5 cd /opt/dafuweng/server && . .venv/bin/activate && set -a && . .env && set +a && python -m stock_server.jobs sync-tushare --start-date $(date +\%F) --end-date $(date +\%F) && python -m stock_server.jobs run-daily-selection --date $(date +\%F) >> logs/cron.log 2>&1
 ```

@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timedelta
 from typing import Sequence
 
 from . import repository
 from .backtest import run_backtest
-from .schemas import BacktestRequest, BacktestResultOut, DailyGroupOut, SelectionRunOut
+from .schemas import BacktestRequest, BacktestResultOut, DailyGroupOut, SelectionRunOut, StockPickOut
+from .strategy import PickSnapshot
 from .strategy import select_limit_up
-from .tushare_provider import fetch_daily_quotes
+from .tushare_provider import fetch_daily_quotes_range
 
 
 DEFAULT_INDICATORS = ["volume", "seal", "close"]
+FULL_DAILY_QUOTE_MIN_COUNT = 1000
+DEFAULT_SYNC_DAYS = 92
 
 
 def run_daily_selection(
@@ -24,13 +28,10 @@ def run_daily_selection(
         raise ValueError("No daily quotes available.")
 
     indicators = list(indicator_ids or DEFAULT_INDICATORS)
+    ensure_quotes_for_date(conn, selected_date)
     quotes = repository.load_quotes(conn, selected_date)
     if not quotes:
-        imported = fetch_daily_quotes(selected_date)
-        if not imported:
-            raise ValueError(f"No Tushare quotes found for {selected_date}.")
-        repository.upsert_daily_quotes(conn, imported)
-        quotes = repository.load_quotes(conn, selected_date)
+        raise ValueError(f"No daily quotes found for {selected_date}.")
 
     picks = select_limit_up(quotes, indicators)
     run_id, generated_at = repository.save_selection_run(conn, selected_date, indicators, picks)
@@ -71,10 +72,83 @@ def run_selection_group(
 
 
 def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> BacktestResultOut:
-    picks = repository.load_picks_for_backtest(conn, request.start_date, request.end_date)
+    ensure_quotes_for_backtest(conn, request.start_date, request.end_date)
+    picks = build_backtest_picks(conn, request.start_date, request.end_date, DEFAULT_INDICATORS, request.holding_days)
     return run_backtest(
         picks=picks,
         holding_days=request.holding_days,
         take_profit_percent=request.take_profit_percent,
         strategy_id=request.strategy_id,
     )
+
+
+def sync_tushare_quotes(conn: sqlite3.Connection, start_date: str, end_date: str) -> int:
+    quotes = fetch_daily_quotes_range(start_date, end_date)
+    if not quotes:
+        raise ValueError(f"No Tushare quotes found from {start_date} to {end_date}.")
+    return repository.upsert_daily_quotes(conn, quotes)
+
+
+def ensure_quotes_for_date(conn: sqlite3.Connection, trade_date: str) -> None:
+    if repository.count_quotes(conn, trade_date) >= FULL_DAILY_QUOTE_MIN_COUNT:
+        return
+    sync_tushare_quotes(conn, date_days_before(trade_date, DEFAULT_SYNC_DAYS), trade_date)
+
+
+def ensure_quotes_for_backtest(
+    conn: sqlite3.Connection,
+    start_date: str | None,
+    end_date: str | None,
+) -> None:
+    selected_end = end_date or repository.latest_quote_date(conn)
+    if not selected_end:
+        return
+    start = start_date or date_days_before(selected_end, DEFAULT_SYNC_DAYS)
+    dates = repository.quote_dates_between(conn, start, selected_end)
+    if dates and repository.count_quotes(conn, dates[-1]) >= FULL_DAILY_QUOTE_MIN_COUNT:
+        return
+    sync_tushare_quotes(conn, start, selected_end)
+
+
+def build_backtest_picks(
+    conn: sqlite3.Connection,
+    start_date: str | None,
+    end_date: str | None,
+    indicator_ids: Sequence[str],
+    holding_days: int,
+) -> list[StockPickOut]:
+    picks: list[StockPickOut] = []
+    for trade_date in repository.quote_dates_between(conn, start_date, end_date):
+        snapshots = select_limit_up(repository.load_quotes(conn, trade_date), indicator_ids)
+        picks.extend(snapshot_to_pick(conn, snapshot, holding_days) for snapshot in snapshots)
+    return picks
+
+
+def snapshot_to_pick(
+    conn: sqlite3.Connection,
+    snapshot: PickSnapshot,
+    holding_days: int,
+) -> StockPickOut:
+    next_open, future_closes = repository.future_prices(conn, snapshot.code, snapshot.trade_date, holding_days)
+    return StockPickOut(
+        trade_date=snapshot.trade_date,
+        code=snapshot.code,
+        name=snapshot.name,
+        board=snapshot.board,
+        board_label=snapshot.board.label,
+        concept=snapshot.concept,
+        close=snapshot.close,
+        change_percent=snapshot.change_percent,
+        volume_ratio=snapshot.volume_ratio,
+        turnover_rate=snapshot.turnover_rate,
+        sealed_amount_wan=snapshot.sealed_amount_wan,
+        stop_loss_price=snapshot.stop_loss_price,
+        next_open=next_open,
+        future_closes=future_closes,
+        minute_trades=[],
+    )
+
+
+def date_days_before(trade_date: str, days: int) -> str:
+    date = datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=days)
+    return date.strftime("%Y-%m-%d")

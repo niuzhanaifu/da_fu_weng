@@ -9,7 +9,7 @@ from .db import connect, init_db
 from .repository import upsert_daily_quotes
 from .sample_data import sample_quotes
 from .schemas import DailyQuoteIn, MarketBoard, MinuteTrade
-from .service import DEFAULT_INDICATORS, run_daily_selection
+from .service import DEFAULT_INDICATORS, run_daily_selection, sync_tushare_quotes
 from .tushare_provider import fetch_daily_quotes
 
 
@@ -26,6 +26,10 @@ def main() -> None:
 
     tushare_parser = subparsers.add_parser("import-tushare")
     tushare_parser.add_argument("--date", dest="trade_date", required=True)
+
+    sync_parser = subparsers.add_parser("sync-tushare")
+    sync_parser.add_argument("--start-date", required=True)
+    sync_parser.add_argument("--end-date", required=True)
 
     csv_parser = subparsers.add_parser("import-csv")
     csv_parser.add_argument("path")
@@ -49,6 +53,9 @@ def main() -> None:
             quotes = fetch_daily_quotes(args.trade_date)
             count = upsert_daily_quotes(conn, quotes)
             print(f"imported {count} tushare quotes")
+        elif args.command == "sync-tushare":
+            count = sync_tushare_quotes(conn, args.start_date, args.end_date)
+            print(f"synced {count} tushare quotes")
         elif args.command == "import-csv":
             quotes = load_quotes_from_csv(Path(args.path))
             count = upsert_daily_quotes(conn, quotes)
