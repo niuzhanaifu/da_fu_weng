@@ -1,0 +1,15 @@
+[Unit]
+Description=Da Fu Weng Stock Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/dafuweng/server
+Environment=DAFUWENG_DB_PATH=/opt/dafuweng/server/data/dafuweng.sqlite3
+Environment=DAFUWENG_ADMIN_TOKEN=change-me
+ExecStart=/opt/dafuweng/server/.venv/bin/uvicorn stock_server.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
