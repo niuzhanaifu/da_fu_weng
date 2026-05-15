@@ -70,9 +70,6 @@ def fetch_daily_quotes_for_date(
         close = as_float(row.get("close"))
         daily_basic = daily_basic_by_code.get(ts_code, {})
         stock = basics.get(ts_code, {})
-        minute_trades = daily_vwap_trade(row)
-        if settings.tushare_fetch_minutes and is_limit_up_row(row, board):
-            minute_trades = fetch_minutes_for_limit_up(token, ts_code, ts_date) or minute_trades
         quotes.append(
             DailyQuoteIn(
                 trade_date=from_tushare_date(row["trade_date"]),
@@ -90,7 +87,7 @@ def fetch_daily_quotes_for_date(
                 sealed_amount_wan=0.0,
                 next_open=None,
                 future_closes=[],
-                minute_trades=minute_trades,
+                minute_trades=daily_vwap_trade(row),
             )
         )
 

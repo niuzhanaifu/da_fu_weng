@@ -9,7 +9,7 @@
 - 提供回测接口
 - 提供安卓端可直接调用的 JSON API
 
-当前已接入 Tushare。服务端读取 `TUSHARE_TOKEN`，在选股请求指定日期且本地没有行情时，会自动拉取历史日线并保存。默认不批量拉取 `stk_mins` 分钟线，避免触发 Tushare 低频接口限制；涨停当日成交均价优先用日线 `amount / vol` 换算得到，需要分钟线止损时再设置 `TUSHARE_FETCH_MINUTES=1`。
+当前已接入 Tushare。服务端读取 `TUSHARE_TOKEN`，在选股请求指定日期且本地没有行情时，会自动拉取当天历史日线并保存。日线同步不会调用 `stk_mins`，避免触发 Tushare 分钟线低频限制；涨停当日成交均价用日线 `amount / vol` 换算得到。
 
 ## 本地启动
 

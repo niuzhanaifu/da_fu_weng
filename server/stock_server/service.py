@@ -92,7 +92,7 @@ def sync_tushare_quotes(conn: sqlite3.Connection, start_date: str, end_date: str
 def ensure_quotes_for_date(conn: sqlite3.Connection, trade_date: str) -> None:
     if repository.count_quotes(conn, trade_date) >= FULL_DAILY_QUOTE_MIN_COUNT:
         return
-    sync_tushare_quotes(conn, date_days_before(trade_date, DEFAULT_SYNC_DAYS), trade_date)
+    sync_tushare_quotes(conn, trade_date, trade_date)
 
 
 def ensure_quotes_for_backtest(

@@ -96,7 +96,7 @@ Runtime log files are written with size-based rotation:
 
 Set `TUSHARE_TOKEN` in `server/.env` or pass it into `deploy.sh`. After deployment, importing one trade date can be tested with:
 
-`TUSHARE_FETCH_MINUTES` defaults to `0` because Tushare `stk_mins` is heavily rate-limited. Keep it disabled for daily selection unless you have enough minute-data quota.
+Daily sync uses Tushare `daily` and `daily_basic` only. It does not call `stk_mins`, because minute data is heavily rate-limited.
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/v1/admin/import-tushare?trade_date=2026-05-15" \
