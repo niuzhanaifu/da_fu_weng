@@ -137,6 +137,51 @@ def future_prices(
     return next_open, future_closes
 
 
+def future_bars(
+    conn: sqlite3.Connection,
+    code: str,
+    trade_date: str,
+    limit: int,
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT trade_date, open, close
+        FROM daily_quotes
+        WHERE code = ?
+          AND trade_date > ?
+        ORDER BY trade_date ASC
+        LIMIT ?
+        """,
+        (code, trade_date, max(1, limit)),
+    ).fetchall()
+
+
+def recent_change_percent(
+    conn: sqlite3.Connection,
+    code: str,
+    trade_date: str,
+    days: int = 3,
+) -> float:
+    rows = conn.execute(
+        """
+        SELECT close
+        FROM daily_quotes
+        WHERE code = ?
+          AND trade_date <= ?
+        ORDER BY trade_date DESC
+        LIMIT ?
+        """,
+        (code, trade_date, days + 1),
+    ).fetchall()
+    if len(rows) < 2:
+        return 0.0
+    latest = rows[0]["close"]
+    base = rows[-1]["close"]
+    if base <= 0:
+        return 0.0
+    return (latest - base) / base * 100.0
+
+
 def save_selection_run(
     conn: sqlite3.Connection,
     trade_date: str,
@@ -298,6 +343,8 @@ def row_to_quote(conn: sqlite3.Connection, row: sqlite3.Row) -> DailyQuoteIn:
         sealed_amount_wan=row["sealed_amount_wan"],
         next_open=row["next_open"],
         future_closes=json.loads(row["future_closes_json"]),
+        future_dates=[],
+        recent_3day_change_percent=0.0,
         minute_trades=[
             MinuteTrade(minute=item["minute"], price=item["price"], volume=item["volume"])
             for item in minute_rows
@@ -331,6 +378,8 @@ def row_to_pick(conn: sqlite3.Connection, row: sqlite3.Row) -> StockPickOut:
         stop_loss_price=row["stop_loss_price"],
         next_open=row["next_open"],
         future_closes=json.loads(row["future_closes_json"]),
+        future_dates=[],
+        recent_3day_change_percent=0.0,
         minute_trades=[
             MinuteTrade(minute=item["minute"], price=item["price"], volume=item["volume"])
             for item in minute_rows

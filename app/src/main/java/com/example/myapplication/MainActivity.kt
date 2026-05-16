@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -34,6 +35,7 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -57,6 +59,8 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -92,6 +96,12 @@ private val RiseRed = Color(0xFFD92323)
 private val FallGreen = Color(0xFF167A54)
 private val ChiNextBlue = Color(0xFF1266D6)
 
+private enum class PickBoardFilter(val label: String) {
+    All("全部"),
+    Main("主板"),
+    ChiNext("创业板")
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         AppLogger.install(applicationContext)
@@ -117,13 +127,15 @@ fun StockApp() {
     var selectedTab by remember { mutableIntStateOf(0) }
     var selectedStock by remember { mutableStateOf<StockPick?>(null) }
     var enabledIndicators by remember { mutableStateOf(setOf("volume", "seal", "close")) }
+    val cachedGroup = remember { SelectionCache.load(context, enabledIndicators) }
+    var selectedPickDate by remember { mutableStateOf(cachedGroup?.date ?: todayDateString()) }
     val localGroups = remember {
         StockSelectionEngine.selectDailyGroups(
             history = SampleMarketData.stockDays(),
             enabledIndicatorIds = setOf("volume", "seal", "close")
         )
     }
-    var groups by remember { mutableStateOf(SelectionCache.load(context, enabledIndicators)?.let { listOf(it) } ?: localGroups) }
+    var groups by remember { mutableStateOf(cachedGroup?.let { listOf(it) } ?: localGroups) }
 
     LaunchedEffect(selectedTab) {
         AppLogger.i("StockApp", "tab changed index=$selectedTab")
@@ -168,9 +180,12 @@ fun StockApp() {
             when (selectedTab) {
                 0 -> PickGroupsPage(
                     groups = groups,
+                    selectedDate = selectedPickDate,
+                    onSelectedDateChange = { selectedPickDate = it },
                     enabledIndicators = enabledIndicators,
                     onSelectionResult = { group ->
                         SelectionCache.save(context, enabledIndicators, group)
+                        selectedPickDate = group.date
                         groups = listOf(group)
                     },
                     onStockClick = { selectedStock = it }
@@ -180,7 +195,9 @@ fun StockApp() {
                     enabledIndicators = enabledIndicators,
                     onChange = {
                         enabledIndicators = it
-                        groups = SelectionCache.load(context, it)?.let { cachedGroup -> listOf(cachedGroup) } ?: emptyList()
+                        val nextCachedGroup = SelectionCache.load(context, it)
+                        selectedPickDate = nextCachedGroup?.date ?: todayDateString()
+                        groups = nextCachedGroup?.let { cachedGroup -> listOf(cachedGroup) } ?: emptyList()
                     },
                     onClearData = { groups = emptyList() }
                 )
@@ -192,12 +209,21 @@ fun StockApp() {
 @Composable
 private fun PickGroupsPage(
     groups: List<DailyPickGroup>,
+    selectedDate: String,
+    onSelectedDateChange: (String) -> Unit,
     enabledIndicators: Set<String>,
     onSelectionResult: (DailyPickGroup) -> Unit,
     onStockClick: (StockPick) -> Unit
 ) {
-    var selectedDate by remember { mutableStateOf(todayDateString()) }
     val group = groups.firstOrNull { it.date == selectedDate }
+    var boardFilter by remember { mutableStateOf(PickBoardFilter.All) }
+    val visiblePicks = group?.picks.orEmpty().filter { pick ->
+        when (boardFilter) {
+            PickBoardFilter.All -> true
+            PickBoardFilter.Main -> pick.board == MarketBoard.Main
+            PickBoardFilter.ChiNext -> pick.board == MarketBoard.ChiNext
+        }
+    }
     var isSelecting by remember { mutableStateOf(false) }
     var selectionError by remember { mutableStateOf<String?>(null) }
     var selectionRequest by remember { mutableIntStateOf(0) }
@@ -211,7 +237,7 @@ private fun PickGroupsPage(
                 tradeDate = selectedDate,
                 indicatorIds = enabledIndicators
             )
-            selectedDate = result.date
+            onSelectedDateChange(result.date)
             onSelectionResult(result)
             AppLogger.i("Selection", "server selection completed date=${result.date} picks=${result.picks.size} indicators=${enabledIndicators.sorted()}")
         } catch (error: Exception) {
@@ -239,7 +265,7 @@ private fun PickGroupsPage(
                 value = selectedDate,
                 onSelected = {
                     AppLogger.d("PickGroups", "calendar date selected=$it")
-                    selectedDate = it
+                    onSelectedDateChange(it)
                 }
             )
         }
@@ -262,7 +288,13 @@ private fun PickGroupsPage(
                     MetricCard("平均止损", current.averageStopLoss.asPrice(), RiseRed, Modifier.weight(1f))
                 }
             }
-            items(current.picks) { pick ->
+            item {
+                PickBoardFilterTabs(
+                    selected = boardFilter,
+                    onSelected = { boardFilter = it }
+                )
+            }
+            items(visiblePicks) { pick ->
                 StockPickCard(
                     pick = pick,
                     onClick = {
@@ -270,6 +302,9 @@ private fun PickGroupsPage(
                         onStockClick(pick)
                     }
                 )
+            }
+            if (visiblePicks.isEmpty()) {
+                item { EmptyState("当前分类没有选股结果。") }
             }
         }
         if (group == null) {
@@ -393,6 +428,41 @@ private fun SelectionActionCard(
 }
 
 @Composable
+private fun PickBoardFilterTabs(
+    selected: PickBoardFilter,
+    onSelected: (PickBoardFilter) -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            PickBoardFilter.values().forEach { filter ->
+                Surface(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onSelected(filter) },
+                    color = if (selected == filter) Color(0xFFEFF6FF) else Color(0xFFF8FAFC),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        filter.label,
+                        modifier = Modifier.padding(vertical = 10.dp),
+                        color = if (selected == filter) ChiNextBlue else Muted,
+                        fontWeight = if (selected == filter) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ClearDataCard(
     message: String?,
     onClear: () -> Unit
@@ -421,29 +491,33 @@ private fun ClearDataCard(
 
 @Composable
 private fun BacktestPage(groups: List<DailyPickGroup>) {
-    val dates = groups.map { it.date }.sorted()
     var holdingDays by remember { mutableIntStateOf(3) }
+    var initialCapitalText by remember { mutableStateOf("100000") }
     val selectedStrategy = BacktestStrategy.OldCat
-    var startDate by remember(dates) { mutableStateOf(dates.firstOrNull().orEmpty()) }
-    var endDate by remember(dates) { mutableStateOf(dates.lastOrNull().orEmpty()) }
-    var isRunning by remember { mutableStateOf(true) }
+    var startDate by remember { mutableStateOf(dateMonthsBefore(todayDateString(), 3)) }
+    var endDate by remember { mutableStateOf(todayDateString()) }
+    var runRequest by remember { mutableIntStateOf(0) }
+    var isRunning by remember { mutableStateOf(false) }
     var showDoneDialog by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<BacktestResult?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val normalizedStart = minOf(startDate, endDate)
     val normalizedEnd = maxOf(startDate, endDate)
 
-    LaunchedEffect(holdingDays, selectedStrategy, normalizedStart, normalizedEnd) {
+    LaunchedEffect(runRequest) {
+        if (runRequest == 0) return@LaunchedEffect
         isRunning = true
         showDoneDialog = false
         errorMessage = null
-        AppLogger.i("Backtest", "started remote strategy=${selectedStrategy.id} range=$normalizedStart..$normalizedEnd holdingDays=$holdingDays")
+        val initialCapital = initialCapitalText.toDoubleOrNull() ?: 0.0
+        AppLogger.i("Backtest", "started remote strategy=${selectedStrategy.id} range=$normalizedStart..$normalizedEnd holdingDays=$holdingDays capital=$initialCapital")
         delay(350)
         try {
             result = MarketApiClient.runOldCatBacktest(
                 startDate = normalizedStart.ifEmpty { null },
                 endDate = normalizedEnd.ifEmpty { null },
-                holdingDays = holdingDays
+                holdingDays = holdingDays,
+                initialCapital = initialCapital
             )
             showDoneDialog = true
             AppLogger.i("Backtest", "remote finished trades=${result?.totalTrades}")
@@ -487,7 +561,6 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
         }
         item {
             DateRangeControls(
-                dates = dates,
                 startDate = startDate,
                 endDate = endDate,
                 onStartDate = {
@@ -503,10 +576,14 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
         item {
             BacktestControls(
                 holdingDays = holdingDays,
+                initialCapitalText = initialCapitalText,
                 onHoldingDays = {
                     AppLogger.d("Backtest", "holdingDays changed=$it")
                     holdingDays = it
-                }
+                },
+                onInitialCapital = { initialCapitalText = it },
+                isRunning = isRunning,
+                onRun = { runRequest += 1 }
             )
         }
         if (isRunning) {
@@ -760,7 +837,6 @@ private fun IntradayStopChart(pick: StockPick) {
 
 @Composable
 private fun DateRangeControls(
-    dates: List<String>,
     startDate: String,
     endDate: String,
     onStartDate: (String) -> Unit,
@@ -773,8 +849,8 @@ private fun DateRangeControls(
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("回测区间", color = Ink, fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DateDropdown("开始", startDate, dates, onStartDate, Modifier.weight(1f))
-                DateDropdown("结束", endDate, dates, onEndDate, Modifier.weight(1f))
+                CalendarDateSelector("开始", startDate, onStartDate, Modifier.weight(1f))
+                CalendarDateSelector("结束", endDate, onEndDate, Modifier.weight(1f))
             }
         }
     }
@@ -814,7 +890,11 @@ private fun StrategyControls(
 @Composable
 private fun BacktestControls(
     holdingDays: Int,
-    onHoldingDays: (Int) -> Unit
+    initialCapitalText: String,
+    onHoldingDays: (Int) -> Unit,
+    onInitialCapital: (String) -> Unit,
+    isRunning: Boolean,
+    onRun: () -> Unit
 ) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Panel),
@@ -822,6 +902,14 @@ private fun BacktestControls(
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("交易参数", color = Ink, fontWeight = FontWeight.Bold)
+            OutlinedTextField(
+                value = initialCapitalText,
+                onValueChange = { raw -> onInitialCapital(raw.filter { it.isDigit() || it == '.' }) },
+                label = { Text("初始资金") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth()
+            )
             Text("最大持有天数：$holdingDays 天", color = Muted, fontSize = 13.sp)
             Slider(
                 value = holdingDays.toFloat(),
@@ -829,6 +917,13 @@ private fun BacktestControls(
                 valueRange = 1f..5f,
                 steps = 3
             )
+            Button(
+                onClick = onRun,
+                enabled = !isRunning && (initialCapitalText.toDoubleOrNull() ?: 0.0) > 0.0,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (isRunning) "回测中" else "开始回测")
+            }
         }
     }
 }
@@ -866,6 +961,10 @@ private fun BacktestSummary(result: BacktestResult) {
             MetricCard("累计收益", result.totalReturnPercent.asPercent(), profitColor(result.totalReturnPercent), Modifier.weight(1f))
             MetricCard("最大回撤", result.maxDrawdownPercent.asPercent(), FallGreen, Modifier.weight(1f))
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MetricCard("初始资金", result.initialCapital.asPrice(), Ink, Modifier.weight(1f))
+            MetricCard("期末资金", result.finalCapital.asPrice(), profitColor(result.finalCapital - result.initialCapital), Modifier.weight(1f))
+        }
     }
 }
 
@@ -885,7 +984,7 @@ private fun DailyOperations(trades: List<BacktestTrade>) {
                         Text(date, color = Ink, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         dayTrades.forEach { trade ->
                             Text(
-                                "买入 ${trade.name} ${trade.code}，买入价 ${trade.buyPrice.asPrice()}；${trade.sellDate} ${trade.exitReason}，卖出价 ${trade.sellPrice.asPrice()}，收益 ${trade.returnPercent.asPercent()}",
+                                "买入 ${trade.name} ${trade.code}，${trade.shares}股，买入额 ${trade.positionAmount.asPrice()}；${trade.sellDate} ${trade.exitReason}，收益 ${trade.profitAmount.asPrice()} / ${trade.returnPercent.asPercent()}",
                                 color = Muted,
                                 fontSize = 12.sp,
                                 lineHeight = 18.sp
@@ -922,6 +1021,11 @@ private fun TradeCard(trade: BacktestTrade) {
                 Text("买 ${trade.buyPrice.asPrice()}", color = Muted, fontSize = 12.sp)
                 Text("卖 ${trade.sellPrice.asPrice()}", color = Muted, fontSize = 12.sp)
                 Text("止损 ${trade.stopLossPrice.asPrice()}", color = Muted, fontSize = 12.sp)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("${trade.shares}股", color = Muted, fontSize = 12.sp)
+                Text("买入额 ${trade.positionAmount.asPrice()}", color = Muted, fontSize = 12.sp)
+                Text("盈亏 ${trade.profitAmount.asPrice()}", color = profitColor(trade.profitAmount), fontSize = 12.sp)
             }
             Text(trade.exitReason, color = Ink, fontSize = 13.sp)
         }
@@ -1097,6 +1201,12 @@ private fun DateDropdown(
 
 private fun todayDateString(): String {
     return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().time)
+}
+
+private fun dateMonthsBefore(value: String, months: Int): String {
+    val calendar = calendarFromDate(value)
+    calendar.add(Calendar.MONTH, -months)
+    return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(calendar.time)
 }
 
 private fun calendarFromDate(value: String): Calendar {

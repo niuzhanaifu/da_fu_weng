@@ -164,7 +164,7 @@ def create_app() -> FastAPI:
     def backtest(request: BacktestRequest, conn=Depends(get_db)) -> BacktestResultOut:
         try:
             result = run_saved_backtest(conn, request)
-        except ValueError as exc:
+        except (ValueError, TushareError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         logger.info(
             "backtest strategy=%s trades=%s win_rate=%.2f return=%.2f max_drawdown=%.2f",

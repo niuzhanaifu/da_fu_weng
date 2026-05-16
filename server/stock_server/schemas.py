@@ -65,6 +65,8 @@ class StockPickOut(BaseModel):
     stop_loss_price: float
     next_open: Optional[float]
     future_closes: List[float]
+    future_dates: List[str] = Field(default_factory=list)
+    recent_3day_change_percent: float = 0.0
     minute_trades: List[MinuteTrade] = Field(default_factory=list)
 
 
@@ -98,6 +100,8 @@ class BacktestRequest(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     strategy_id: str = Field(default="old_cat")
+    initial_capital: float = Field(default=100000.0, ge=0.0)
+    max_positions_per_day: int = Field(default=5, ge=1, le=20)
     holding_days: int = Field(default=3, ge=1, le=20)
     take_profit_percent: float = Field(default=6.0, ge=0.1, le=50.0)
 
@@ -110,12 +114,17 @@ class BacktestTradeOut(BaseModel):
     sell_date: str
     buy_price: float
     sell_price: float
+    shares: int = 0
+    position_amount: float = 0.0
+    profit_amount: float = 0.0
     stop_loss_price: float
     return_percent: float
     exit_reason: str
 
 
 class BacktestResultOut(BaseModel):
+    initial_capital: float = 0.0
+    final_capital: float = 0.0
     total_trades: int
     win_rate: float
     total_return_percent: float

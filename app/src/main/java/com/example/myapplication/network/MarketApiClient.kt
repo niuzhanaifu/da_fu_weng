@@ -22,11 +22,15 @@ object MarketApiClient {
     suspend fun runOldCatBacktest(
         startDate: String?,
         endDate: String?,
-        holdingDays: Int
+        holdingDays: Int,
+        initialCapital: Double,
+        maxPositionsPerDay: Int = 5
     ): BacktestResult = withContext(Dispatchers.IO) {
         val payload = JSONObject().apply {
             put("strategy_id", "old_cat")
             put("holding_days", holdingDays)
+            put("initial_capital", initialCapital)
+            put("max_positions_per_day", maxPositionsPerDay)
             put("take_profit_percent", 6.0)
             if (!startDate.isNullOrBlank()) put("start_date", startDate)
             if (!endDate.isNullOrBlank()) put("end_date", endDate)
@@ -84,6 +88,9 @@ object MarketApiClient {
                         sellDate = item.getString("sell_date"),
                         buyPrice = item.getDouble("buy_price"),
                         sellPrice = item.getDouble("sell_price"),
+                        shares = item.optInt("shares", 0),
+                        positionAmount = item.optDouble("position_amount", 0.0),
+                        profitAmount = item.optDouble("profit_amount", 0.0),
                         stopLossPrice = item.getDouble("stop_loss_price"),
                         returnPercent = item.getDouble("return_percent"),
                         exitReason = item.getString("exit_reason")
@@ -92,6 +99,8 @@ object MarketApiClient {
             }
         }
         return BacktestResult(
+            initialCapital = optDouble("initial_capital", 0.0),
+            finalCapital = optDouble("final_capital", 0.0),
             totalTrades = getInt("total_trades"),
             winRate = getDouble("win_rate"),
             totalReturnPercent = getDouble("total_return_percent"),

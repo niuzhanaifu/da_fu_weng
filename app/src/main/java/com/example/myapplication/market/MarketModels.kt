@@ -86,12 +86,17 @@ data class BacktestTrade(
     val sellDate: String,
     val buyPrice: Double,
     val sellPrice: Double,
+    val shares: Int = 0,
+    val positionAmount: Double = 0.0,
+    val profitAmount: Double = 0.0,
     val stopLossPrice: Double,
     val returnPercent: Double,
     val exitReason: String
 )
 
 data class BacktestResult(
+    val initialCapital: Double = 0.0,
+    val finalCapital: Double = 0.0,
     val totalTrades: Int,
     val winRate: Double,
     val totalReturnPercent: Double,

@@ -79,6 +79,8 @@ def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> Ba
         holding_days=request.holding_days,
         take_profit_percent=request.take_profit_percent,
         strategy_id=request.strategy_id,
+        initial_capital=request.initial_capital,
+        max_positions_per_day=request.max_positions_per_day,
     )
 
 
@@ -107,7 +109,10 @@ def ensure_quotes_for_backtest(
     dates = repository.quote_dates_between(conn, start, selected_end)
     if dates and repository.count_quotes(conn, dates[-1]) >= FULL_DAILY_QUOTE_MIN_COUNT:
         return
-    sync_tushare_quotes(conn, start, selected_end)
+    try:
+        sync_tushare_quotes(conn, start, selected_end)
+    except ValueError:
+        return
 
 
 def build_backtest_picks(
@@ -129,7 +134,8 @@ def snapshot_to_pick(
     snapshot: PickSnapshot,
     holding_days: int,
 ) -> StockPickOut:
-    next_open, future_closes = repository.future_prices(conn, snapshot.code, snapshot.trade_date, holding_days)
+    future_bars = repository.future_bars(conn, snapshot.code, snapshot.trade_date, holding_days)
+    next_open = future_bars[0]["open"] if future_bars else None
     return StockPickOut(
         trade_date=snapshot.trade_date,
         code=snapshot.code,
@@ -144,7 +150,9 @@ def snapshot_to_pick(
         sealed_amount_wan=snapshot.sealed_amount_wan,
         stop_loss_price=snapshot.stop_loss_price,
         next_open=next_open,
-        future_closes=future_closes,
+        future_closes=[bar["close"] for bar in future_bars],
+        future_dates=[bar["trade_date"] for bar in future_bars],
+        recent_3day_change_percent=repository.recent_change_percent(conn, snapshot.code, snapshot.trade_date),
         minute_trades=[],
     )
 
