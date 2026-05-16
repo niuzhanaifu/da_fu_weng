@@ -34,11 +34,10 @@ def run_daily_selection(
         raise ValueError(f"No daily quotes found for {selected_date}.")
 
     picks = select_limit_up(quotes, indicators)
-    run_id, generated_at = repository.save_selection_run(conn, selected_date, indicators, picks)
     return SelectionRunOut(
         trade_date=selected_date,
-        run_id=run_id,
-        generated_at=generated_at,
+        run_id=0,
+        generated_at=current_timestamp(),
         pick_count=len(picks),
         indicator_ids=indicators,
     )
@@ -64,16 +63,34 @@ def run_selection_group(
     trade_date: str | None,
     indicator_ids: Sequence[str] | None = None,
 ) -> DailyGroupOut:
-    run = run_daily_selection(conn, trade_date, indicator_ids)
-    group = get_group(conn, run.trade_date)
-    if group is None:
-        raise ValueError("Selection completed but no group was saved.")
-    return group
+    selected_date = trade_date or repository.latest_quote_date(conn)
+    if not selected_date:
+        raise ValueError("No daily quotes available.")
+
+    indicators = list(indicator_ids or DEFAULT_INDICATORS)
+    ensure_quotes_for_date(conn, selected_date)
+    snapshots = select_limit_up(repository.load_quotes(conn, selected_date), indicators)
+    picks = [snapshot_to_pick(conn, snapshot, holding_days=3) for snapshot in snapshots]
+    return DailyGroupOut(
+        trade_date=selected_date,
+        generated_at=current_timestamp(),
+        indicator_ids=indicators,
+        main_count=sum(1 for pick in picks if pick.board.value == "main"),
+        chinext_count=sum(1 for pick in picks if pick.board.value == "chinext"),
+        picks=picks,
+    )
 
 
 def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> BacktestResultOut:
     ensure_quotes_for_backtest(conn, request.start_date, request.end_date)
-    picks = build_backtest_picks(conn, request.start_date, request.end_date, DEFAULT_INDICATORS, request.holding_days)
+    picks = build_backtest_picks(
+        conn,
+        request.start_date,
+        request.end_date,
+        DEFAULT_INDICATORS,
+        request.holding_days,
+        request.board.value if request.board else None,
+    )
     return run_backtest(
         picks=picks,
         holding_days=request.holding_days,
@@ -121,10 +138,13 @@ def build_backtest_picks(
     end_date: str | None,
     indicator_ids: Sequence[str],
     holding_days: int,
+    board: str | None = None,
 ) -> list[StockPickOut]:
     picks: list[StockPickOut] = []
     for trade_date in repository.quote_dates_between(conn, start_date, end_date):
         snapshots = select_limit_up(repository.load_quotes(conn, trade_date), indicator_ids)
+        if board:
+            snapshots = [snapshot for snapshot in snapshots if snapshot.board.value == board]
         picks.extend(snapshot_to_pick(conn, snapshot, holding_days) for snapshot in snapshots)
     return picks
 
@@ -134,8 +154,9 @@ def snapshot_to_pick(
     snapshot: PickSnapshot,
     holding_days: int,
 ) -> StockPickOut:
-    future_bars = repository.future_bars(conn, snapshot.code, snapshot.trade_date, holding_days)
+    future_bars = repository.future_bars(conn, snapshot.code, snapshot.trade_date, holding_days + 2)
     next_open = future_bars[0]["open"] if future_bars else None
+    latest = repository.latest_quote_for_code(conn, snapshot.code)
     return StockPickOut(
         trade_date=snapshot.trade_date,
         code=snapshot.code,
@@ -149,10 +170,14 @@ def snapshot_to_pick(
         turnover_rate=snapshot.turnover_rate,
         sealed_amount_wan=snapshot.sealed_amount_wan,
         stop_loss_price=snapshot.stop_loss_price,
+        latest_trade_date=latest["trade_date"] if latest else None,
+        latest_close=latest["close"] if latest else None,
         next_open=next_open,
         future_closes=[bar["close"] for bar in future_bars],
+        future_opens=[bar["open"] for bar in future_bars],
         future_dates=[bar["trade_date"] for bar in future_bars],
-        recent_3day_change_percent=repository.recent_change_percent(conn, snapshot.code, snapshot.trade_date),
+        recent_3day_change_percent=repository.recent_change_percent(conn, snapshot.code, snapshot.trade_date, 3),
+        recent_5day_change_percent=repository.recent_change_percent(conn, snapshot.code, snapshot.trade_date, 5),
         minute_trades=[],
     )
 
@@ -160,3 +185,7 @@ def snapshot_to_pick(
 def date_days_before(trade_date: str, days: int) -> str:
     date = datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=days)
     return date.strftime("%Y-%m-%d")
+
+
+def current_timestamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

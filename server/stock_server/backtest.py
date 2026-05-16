@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, Sequence
 
-from .schemas import BacktestResultOut, BacktestTradeOut, StockPickOut
+from .schemas import BacktestResultOut, BacktestTradeOut, EquityPointOut, StockPickOut
 
 
 LOT_SIZE = 100
@@ -21,14 +21,17 @@ class OldCatStrategy:
     id: str = "old_cat"
 
     def simulate_trade(self, pick: StockPickOut, holding_days: int) -> BacktestTradeOut | None:
-        buy_price = pick.next_open
-        if buy_price is None or buy_price <= 0:
-            return None
-        if buy_price > pick.close * 1.03:
+        if len(pick.future_opens) < 2 or len(pick.future_closes) < 2 or len(pick.future_dates) < 2:
             return None
 
-        future_closes = pick.future_closes[: max(1, holding_days)]
-        future_dates = pick.future_dates[: len(future_closes)]
+        buy_price = pick.future_opens[1]
+        if buy_price is None or buy_price <= 0:
+            return None
+        if buy_price > pick.close * 1.05:
+            return None
+
+        future_closes = pick.future_closes[1 : 1 + max(1, holding_days)]
+        future_dates = pick.future_dates[1 : 1 + len(future_closes)]
         if not future_closes:
             return None
 
@@ -47,7 +50,7 @@ class OldCatStrategy:
             code=pick.code,
             name=pick.name,
             board=pick.board,
-            buy_date=pick.trade_date,
+            buy_date=future_dates[0],
             sell_date=future_dates[sell_index] if sell_index < len(future_dates) else f"T+{sell_index + 1}",
             buy_price=buy_price,
             sell_price=sell_price,
@@ -76,13 +79,19 @@ class OpenPosition:
         return (self.trade.sell_price - self.trade.buy_price) * self.shares
 
 
+@dataclass(frozen=True)
+class PlannedTrade:
+    trade: BacktestTradeOut
+    rank_change_percent: float
+
+
 def run_backtest(
     picks: Sequence[StockPickOut],
     holding_days: int,
     take_profit_percent: float,
     strategy_id: str = "old_cat",
     initial_capital: float = 100000.0,
-    max_positions_per_day: int = 5,
+    max_positions_per_day: int = 3,
 ) -> BacktestResultOut:
     strategy = STRATEGIES.get(strategy_id)
     if strategy is None:
@@ -94,20 +103,30 @@ def run_backtest(
     equity = initial_capital
     peak = initial_capital
     max_drawdown = 0.0
+    equity_curve: list[EquityPointOut] = []
 
     picks_by_date = group_picks_by_date(picks)
-    all_dates = sorted(set(picks_by_date.keys()))
-    for trade_date in all_dates:
-        cash, sold = close_due_positions(cash, open_positions, trade_date)
-        closed_trades.extend(sold)
+    planned_trades_by_date: dict[str, list[PlannedTrade]] = {}
+    for trade_date, day_picks in picks_by_date.items():
+        for pick in rank_daily_picks(day_picks):
+            trade = strategy.simulate_trade(pick, holding_days=holding_days)
+            if trade is not None:
+                planned_trades_by_date.setdefault(trade.buy_date, []).append(
+                    PlannedTrade(
+                        trade=trade,
+                        rank_change_percent=pick.recent_5day_change_percent,
+                    )
+                )
 
+    all_dates = sorted(
+        set(picks_by_date.keys())
+        | set(planned_trades_by_date.keys())
+        | {date for pick in picks for date in pick.future_dates}
+    )
+    for trade_date in all_dates:
         candidates = [
-            trade
-            for trade in (
-                strategy.simulate_trade(pick, holding_days=holding_days)
-                for pick in rank_daily_picks(picks_by_date[trade_date])[:max_positions_per_day]
-            )
-            if trade is not None
+            planned.trade
+            for planned in rank_planned_trades(planned_trades_by_date.get(trade_date, []))[:max_positions_per_day]
         ]
         if candidates:
             allocation = cash / len(candidates)
@@ -120,7 +139,11 @@ def run_backtest(
                 trade.position_amount = shares * trade.buy_price
                 open_positions.append(OpenPosition(trade=trade, shares=shares))
 
+        cash, sold = close_due_positions(cash, open_positions, trade_date)
+        closed_trades.extend(sold)
+
         equity = cash + sum(position.trade.buy_price * position.shares for position in open_positions)
+        equity_curve.append(EquityPointOut(trade_date=trade_date, capital=equity))
         peak = max(peak, equity)
         if peak > 0:
             max_drawdown = max(max_drawdown, (peak - equity) / peak * 100.0)
@@ -131,6 +154,12 @@ def run_backtest(
         cash += position.sell_value
 
     final_capital = cash
+    if all_dates:
+        final_point = EquityPointOut(trade_date=all_dates[-1], capital=final_capital)
+        if equity_curve and equity_curve[-1].trade_date == final_point.trade_date:
+            equity_curve[-1] = final_point
+        else:
+            equity_curve.append(final_point)
     total_return_percent = ((final_capital - initial_capital) / initial_capital * 100.0) if initial_capital > 0 else 0.0
     if not closed_trades:
         return BacktestResultOut(
@@ -141,6 +170,7 @@ def run_backtest(
             total_return_percent=total_return_percent,
             max_drawdown_percent=max_drawdown,
             trades=[],
+            equity_curve=equity_curve,
         )
 
     return BacktestResultOut(
@@ -151,6 +181,7 @@ def run_backtest(
         total_return_percent=total_return_percent,
         max_drawdown_percent=max_drawdown,
         trades=sorted(closed_trades, key=lambda item: item.buy_date, reverse=True),
+        equity_curve=equity_curve,
     )
 
 
@@ -162,7 +193,11 @@ def group_picks_by_date(picks: Sequence[StockPickOut]) -> dict[str, list[StockPi
 
 
 def rank_daily_picks(picks: Sequence[StockPickOut]) -> list[StockPickOut]:
-    return sorted(picks, key=lambda item: (item.recent_3day_change_percent, item.code))
+    return sorted(picks, key=lambda item: (item.recent_5day_change_percent, item.code))
+
+
+def rank_planned_trades(planned_trades: Sequence[PlannedTrade]) -> list[PlannedTrade]:
+    return sorted(planned_trades, key=lambda item: (item.rank_change_percent, item.trade.code))
 
 
 def close_due_positions(

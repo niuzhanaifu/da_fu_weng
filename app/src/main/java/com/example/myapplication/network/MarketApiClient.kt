@@ -3,6 +3,7 @@ package com.example.myapplication.network
 import com.example.myapplication.market.BacktestResult
 import com.example.myapplication.market.BacktestTrade
 import com.example.myapplication.market.DailyPickGroup
+import com.example.myapplication.market.EquityPoint
 import com.example.myapplication.market.MarketBoard
 import com.example.myapplication.market.MinuteTrade
 import com.example.myapplication.market.StockPick
@@ -24,13 +25,15 @@ object MarketApiClient {
         endDate: String?,
         holdingDays: Int,
         initialCapital: Double,
-        maxPositionsPerDay: Int = 5
+        board: MarketBoard?,
+        maxPositionsPerDay: Int = 3
     ): BacktestResult = withContext(Dispatchers.IO) {
         val payload = JSONObject().apply {
             put("strategy_id", "old_cat")
             put("holding_days", holdingDays)
             put("initial_capital", initialCapital)
             put("max_positions_per_day", maxPositionsPerDay)
+            board?.let { put("board", if (it == MarketBoard.ChiNext) "chinext" else "main") }
             put("take_profit_percent", 6.0)
             if (!startDate.isNullOrBlank()) put("start_date", startDate)
             if (!endDate.isNullOrBlank()) put("end_date", endDate)
@@ -98,6 +101,15 @@ object MarketApiClient {
                 )
             }
         }
+        val equityArray = optJSONArray("equity_curve")
+        val equityCurve = buildList {
+            if (equityArray != null) {
+                for (index in 0 until equityArray.length()) {
+                    val item = equityArray.getJSONObject(index)
+                    add(EquityPoint(date = item.getString("trade_date"), capital = item.getDouble("capital")))
+                }
+            }
+        }
         return BacktestResult(
             initialCapital = optDouble("initial_capital", 0.0),
             finalCapital = optDouble("final_capital", 0.0),
@@ -105,7 +117,8 @@ object MarketApiClient {
             winRate = getDouble("win_rate"),
             totalReturnPercent = getDouble("total_return_percent"),
             maxDrawdownPercent = getDouble("max_drawdown_percent"),
-            trades = trades
+            trades = trades,
+            equityCurve = equityCurve
         )
     }
 
@@ -127,6 +140,8 @@ object MarketApiClient {
                         turnoverRate = item.getDouble("turnover_rate"),
                         sealedAmountWan = item.getDouble("sealed_amount_wan"),
                         stopLossPrice = item.getDouble("stop_loss_price"),
+                        latestTradeDate = item.optString("latest_trade_date").ifBlank { null },
+                        latestClose = if (item.isNull("latest_close")) null else item.getDouble("latest_close"),
                         minuteTrades = item.optJSONArray("minute_trades").toMinuteTrades(),
                         nextOpen = if (item.isNull("next_open")) item.getDouble("close") else item.getDouble("next_open"),
                         futureCloses = item.optJSONArray("future_closes").toDoubleList(),

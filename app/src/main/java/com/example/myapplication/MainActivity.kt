@@ -71,6 +71,7 @@ import com.example.myapplication.market.BacktestStrategy
 import com.example.myapplication.market.BacktestTrade
 import com.example.myapplication.market.DailyCandle
 import com.example.myapplication.market.DailyPickGroup
+import com.example.myapplication.market.EquityPoint
 import com.example.myapplication.market.IndicatorCatalog
 import com.example.myapplication.market.MarketBoard
 import com.example.myapplication.market.SampleMarketData
@@ -285,7 +286,7 @@ private fun PickGroupsPage(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MetricCard("主板", "${current.mainCount}只", FallGreen, Modifier.weight(1f))
                     MetricCard("创业板", "${current.chiNextCount}只", ChiNextBlue, Modifier.weight(1f))
-                    MetricCard("平均止损", current.averageStopLoss.asPrice(), RiseRed, Modifier.weight(1f))
+                    MetricCard("分时均线止损", current.averageStopLoss.asPrice(), RiseRed, Modifier.weight(1f))
                 }
             }
             item {
@@ -348,7 +349,7 @@ private fun StockDetailPage(
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         QuoteCell("收盘", pick.close.asPrice(), RiseRed, Modifier.weight(1f))
                         QuoteCell("涨幅", pick.changePercent.asPercent(), RiseRed, Modifier.weight(1f))
-                        QuoteCell("止损", pick.stopLossPrice.asPrice(), FallGreen, Modifier.weight(1f))
+                        QuoteCell("分时均线止损", pick.stopLossPrice.asPrice(), FallGreen, Modifier.weight(1f))
                     }
                 }
             }
@@ -493,6 +494,7 @@ private fun ClearDataCard(
 private fun BacktestPage(groups: List<DailyPickGroup>) {
     var holdingDays by remember { mutableIntStateOf(3) }
     var initialCapitalText by remember { mutableStateOf("100000") }
+    var boardFilter by remember { mutableStateOf(PickBoardFilter.All) }
     val selectedStrategy = BacktestStrategy.OldCat
     var startDate by remember { mutableStateOf(dateMonthsBefore(todayDateString(), 3)) }
     var endDate by remember { mutableStateOf(todayDateString()) }
@@ -517,7 +519,12 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                 startDate = normalizedStart.ifEmpty { null },
                 endDate = normalizedEnd.ifEmpty { null },
                 holdingDays = holdingDays,
-                initialCapital = initialCapital
+                initialCapital = initialCapital,
+                board = when (boardFilter) {
+                    PickBoardFilter.All -> null
+                    PickBoardFilter.Main -> MarketBoard.Main
+                    PickBoardFilter.ChiNext -> MarketBoard.ChiNext
+                }
             )
             showDoneDialog = true
             AppLogger.i("Backtest", "remote finished trades=${result?.totalTrades}")
@@ -574,6 +581,12 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
             )
         }
         item {
+            PickBoardFilterTabs(
+                selected = boardFilter,
+                onSelected = { boardFilter = it }
+            )
+        }
+        item {
             BacktestControls(
                 holdingDays = holdingDays,
                 initialCapitalText = initialCapitalText,
@@ -594,6 +607,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
         }
         result?.let { current ->
             item { BacktestSummary(current) }
+            item { EquityCurveChart(current.equityCurve) }
             item { DailyOperations(current.trades) }
             items(current.trades) { trade ->
                 TradeCard(trade)
@@ -689,8 +703,11 @@ private fun StockPickCard(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 QuoteCell("收盘", pick.close.asPrice(), RiseRed, Modifier.weight(1f))
-                QuoteCell("止损", pick.stopLossPrice.asPrice(), FallGreen, Modifier.weight(1f))
+                QuoteCell("分时均线止损", pick.stopLossPrice.asPrice(), FallGreen, Modifier.weight(1f))
                 QuoteCell("封单", "${pick.sealedAmountWan.roundToInt()}万", Ink, Modifier.weight(1f))
+            }
+            pick.latestClose?.let { latest ->
+                Text("最新收盘 ${latest.asPrice()} / ${pick.latestTradeDate.orEmpty()}", color = Muted, fontSize = 12.sp)
             }
         }
     }
@@ -969,6 +986,60 @@ private fun BacktestSummary(result: BacktestResult) {
 }
 
 @Composable
+private fun EquityCurveChart(points: List<EquityPoint>) {
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = Panel),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("资金走势", color = Ink, fontWeight = FontWeight.Bold)
+            if (points.size < 2) {
+                Text("暂无足够数据绘制资金曲线。", color = Muted, fontSize = 13.sp)
+                return@Column
+            }
+            val minCapital = points.minOf { it.capital }
+            val maxCapital = points.maxOf { it.capital }
+            val range = max(1.0, maxCapital - minCapital)
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+            ) {
+                repeat(4) { index ->
+                    val y = size.height * (index + 1) / 5f
+                    drawLine(
+                        color = Color(0xFFE5E7EB),
+                        start = Offset(0f, y),
+                        end = Offset(size.width, y),
+                        strokeWidth = 1.dp.toPx()
+                    )
+                }
+                val step = size.width / (points.size - 1)
+                val chartPoints = points.mapIndexed { index, point ->
+                    Offset(
+                        x = index * step,
+                        y = size.height - ((point.capital - minCapital) / range * size.height).toFloat()
+                    )
+                }
+                chartPoints.zipWithNext().forEach { (start, end) ->
+                    drawLine(
+                        color = ChiNextBlue,
+                        start = start,
+                        end = end,
+                        strokeWidth = 3.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(points.first().date, color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                Text(points.last().date, color = Muted, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+@Composable
 private fun DailyOperations(trades: List<BacktestTrade>) {
     ElevatedCard(
         colors = CardDefaults.elevatedCardColors(containerColor = Panel),
@@ -979,13 +1050,24 @@ private fun DailyOperations(trades: List<BacktestTrade>) {
             if (trades.isEmpty()) {
                 Text("当前区间没有交易。", color = Muted, fontSize = 13.sp)
             } else {
-                trades.groupBy { it.buyDate }.toSortedMap(compareByDescending { it }).forEach { (date, dayTrades) ->
+                val operationDates = (trades.map { it.buyDate } + trades.map { it.sellDate }).distinct().sortedDescending()
+                operationDates.forEach { date ->
+                    val buys = trades.filter { it.buyDate == date }
+                    val sells = trades.filter { it.sellDate == date }
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(date, color = Ink, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        dayTrades.forEach { trade ->
+                        buys.forEach { trade ->
                             Text(
-                                "买入 ${trade.name} ${trade.code}，${trade.shares}股，买入额 ${trade.positionAmount.asPrice()}；${trade.sellDate} ${trade.exitReason}，收益 ${trade.profitAmount.asPrice()} / ${trade.returnPercent.asPercent()}",
+                                "买入 ${trade.name} ${trade.code}，${trade.shares}股，买入价 ${trade.buyPrice.asPrice()}，买入额 ${trade.positionAmount.asPrice()}",
                                 color = Muted,
+                                fontSize = 12.sp,
+                                lineHeight = 18.sp
+                            )
+                        }
+                        sells.forEach { trade ->
+                            Text(
+                                "卖出 ${trade.name} ${trade.code}，${trade.shares}股，卖出价 ${trade.sellPrice.asPrice()}，盈亏 ${trade.profitAmount.asPrice()}",
+                                color = profitColor(trade.profitAmount),
                                 fontSize = 12.sp,
                                 lineHeight = 18.sp
                             )
@@ -1020,7 +1102,7 @@ private fun TradeCard(trade: BacktestTrade) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("买 ${trade.buyPrice.asPrice()}", color = Muted, fontSize = 12.sp)
                 Text("卖 ${trade.sellPrice.asPrice()}", color = Muted, fontSize = 12.sp)
-                Text("止损 ${trade.stopLossPrice.asPrice()}", color = Muted, fontSize = 12.sp)
+                Text("分时均线止损 ${trade.stopLossPrice.asPrice()}", color = Muted, fontSize = 12.sp)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("${trade.shares}股", color = Muted, fontSize = 12.sp)
@@ -1084,6 +1166,9 @@ private fun CalendarDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = Panel,
+        titleContentColor = Ink,
+        textContentColor = Ink,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = {
@@ -1121,18 +1206,35 @@ private fun CalendarDialog(
                     Row {
                         week.forEach { day ->
                             if (day == null) {
-                                Spacer(Modifier.weight(1f))
+                                Spacer(
+                                    Modifier
+                                        .weight(1f)
+                                        .height(42.dp)
+                                )
                             } else {
                                 val date = formatDate(year, month, day)
-                                TextButton(
-                                    modifier = Modifier.weight(1f),
-                                    onClick = { onSelected(date) }
+                                val isSelected = date == selectedDate
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(42.dp),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Text(
-                                        day.toString(),
-                                        color = if (date == selectedDate) RiseRed else Ink,
-                                        fontWeight = if (date == selectedDate) FontWeight.Bold else FontWeight.Normal
-                                    )
+                                    Surface(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clickable { onSelected(date) },
+                                        shape = CircleShape,
+                                        color = if (isSelected) RiseRed else Color.Transparent
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Text(
+                                                day.toString(),
+                                                color = if (isSelected) Color.White else Ink,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1276,7 +1378,7 @@ private fun MetricCard(label: String, value: String, accent: Color, modifier: Mo
 @Composable
 private fun QuoteCell(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(label, color = Muted, fontSize = 12.sp)
+        Text(label, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(value, color = color, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }

@@ -4,12 +4,23 @@
 
 - 存储每日行情和分时成交数据
 - 收盘后按策略筛选主板、创业板涨停股
-- 保存每日选股分组
+- 实时计算每日选股结果，选股结果和回测结果不落库
 - 计算涨停当日分时成交均价作为止损价
 - 提供回测接口
 - 提供安卓端可直接调用的 JSON API
 
-当前已接入 Tushare。服务端读取 `TUSHARE_TOKEN`，在选股请求指定日期且本地没有行情时，会自动拉取当天历史日线并保存。日线同步不会调用 `stk_mins`，避免触发 Tushare 分钟线低频限制；涨停当日成交均价用日线 `amount / vol` 换算得到。
+当前已接入 Tushare。服务端读取 `TUSHARE_TOKEN`，在选股请求指定日期且本地没有完整行情时，会自动拉取当天历史日线并保存。判断标准是当天 `daily_quotes` 数量不少于 1000 条；满足这个条件时，每日选股只读本地数据库，不会再请求 Tushare。日线同步不会调用 `stk_mins`，避免触发 Tushare 分钟线低频限制；涨停当日成交均价用日线 `amount / vol` 换算得到。
+
+服务端只长期保存下载的股票行情数据：
+
+- `daily_quotes`：日线行情
+- `minute_trades`：当前主要用于保存由日线成交额/成交量换算出的均价点
+
+以下数据不会长期保存：
+
+- APP 发起的选股结果
+- 回测交易明细
+- 回测资金曲线
 
 ## 本地启动
 
@@ -27,6 +38,20 @@ python -m stock_server.jobs run-daily-selection --date 2026-05-14
 uvicorn stock_server.main:app --host 0.0.0.0 --port 8000
 ```
 
+上面每条命令说明：
+
+- `cd server`：进入服务端目录。
+- `python3 -m venv .venv`：创建 Python 虚拟环境。
+- `source .venv/bin/activate`：启用虚拟环境。
+- `pip install -r requirements.txt`：安装 FastAPI、Uvicorn、Pydantic 等服务端依赖。
+- `cp .env.example .env`：复制环境变量模板。
+- `export DAFUWENG_ADMIN_TOKEN=change-me`：设置管理接口令牌，本地临时运行时使用。
+- `export TUSHARE_TOKEN=your-token`：设置 Tushare Token，本地临时运行时使用。
+- `python -m stock_server.jobs init-db`：初始化 SQLite 数据库和表结构。
+- `python -m stock_server.jobs seed-sample`：写入示例行情，方便没有真实数据时调试。
+- `python -m stock_server.jobs run-daily-selection --date 2026-05-14`：按指定日期试跑一次选股，只输出结果，不保存选股结果。
+- `uvicorn stock_server.main:app --host 0.0.0.0 --port 8000`：启动 HTTP 服务。
+
 访问：
 
 ```bash
@@ -37,6 +62,14 @@ curl http://127.0.0.1:8000/api/v1/groups/latest
 curl "http://127.0.0.1:8000/api/v1/stocks/600536/candles?limit=120"
 ```
 
+上面每条命令说明：
+
+- `curl http://127.0.0.1:8000/health`：检查服务是否启动成功。
+- `curl http://127.0.0.1:8000/api/v1/indicators`：查看 APP 可选择的选股指标。
+- `curl http://127.0.0.1:8000/api/v1/backtest-strategies`：查看当前支持的回测战法。
+- `curl http://127.0.0.1:8000/api/v1/groups/latest`：读取旧版已保存选股分组；新逻辑不再保存选股结果，正常应使用 `/api/v1/selections/run`。
+- `curl "http://127.0.0.1:8000/api/v1/stocks/600536/candles?limit=120"`：读取某只股票最近 120 根日 K 线。
+
 指定日期触发服务端选股：
 
 ```bash
@@ -45,13 +78,29 @@ curl -X POST http://127.0.0.1:8000/api/v1/selections/run \
   -d '{"trade_date":"2026-05-15","indicator_ids":["volume","seal","close"]}'
 ```
 
+命令说明：
+
+- `POST /api/v1/selections/run`：按指定日期和指标实时选股，结果直接返回给 APP，不保存到服务端数据库。
+- 如果 `2026-05-15` 本地行情完整，服务端只读本地 SQLite，不请求 Tushare。
+- 如果 `2026-05-15` 本地行情不存在或少于 1000 条，服务端会调用 Tushare 日线接口补齐当天数据。
+
 回测：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/backtests \
   -H "Content-Type: application/json" \
-  -d '{"strategy_id":"old_cat","holding_days":3}'
+  -d '{"strategy_id":"old_cat","holding_days":3,"initial_capital":100000,"max_positions_per_day":3,"board":"main","start_date":"2026-02-15","end_date":"2026-05-15"}'
 ```
+
+命令说明：
+
+- `POST /api/v1/backtests`：运行回测，结果直接返回，不保存回测结果。
+- `strategy_id`：战法 ID，当前只有 `old_cat`。
+- `holding_days`：买入后最多持有交易日数量。
+- `initial_capital`：初始资金。
+- `max_positions_per_day`：每日最多买入股票数量，当前 APP 默认 3。
+- `board`：回测板块，可填 `main`、`chinext`，不填表示全部。
+- `start_date` / `end_date`：回测区间。
 
 ## 导入行情
 
@@ -91,11 +140,15 @@ CSV 导入：
 python -m stock_server.jobs import-csv data/sample_quotes.csv
 ```
 
+命令说明：从 CSV 文件导入行情数据，会写入 `daily_quotes` 和 `minute_trades`。
+
 Tushare 导入：
 
 ```bash
 python -m stock_server.jobs import-tushare --date 2026-05-15
 ```
+
+命令说明：从 Tushare 拉取某一天 A 股日线数据，并保存到本地 SQLite。
 
 同步一个区间的历史日线：
 
@@ -103,7 +156,15 @@ python -m stock_server.jobs import-tushare --date 2026-05-15
 python -m stock_server.jobs sync-tushare --start-date 2026-02-15 --end-date 2026-05-15
 ```
 
-同步逻辑会拉取 `trade_cal`、`daily` 和 `daily_basic`，把主板、创业板历史日线落到 SQLite。选股和回测优先使用本地数据库；只有指定日期本地数据不存在或明显不完整时，才会补拉最近约三个月数据。
+命令说明：从 Tushare 拉取一个区间内的历史日线，并保存到本地 SQLite。同步逻辑会拉取 `trade_cal`、`daily` 和 `daily_basic`，把主板、创业板历史日线落到 SQLite。
+
+清理旧的服务端选股快照：
+
+```bash
+python -m stock_server.jobs clear-derived-data
+```
+
+命令说明：删除旧版本保存过的 `selection_runs` 和 `stock_picks`，并执行 SQLite 空间回收。这个命令不会删除 `daily_quotes` 和 `minute_trades`，因此不会删除已下载的股票行情数据。
 
 CSV 字段见 `data/sample_quotes.csv`。其中：
 
@@ -118,6 +179,8 @@ CSV 字段见 `data/sample_quotes.csv`。其中：
 ```bash
 python -m stock_server.jobs run-daily-selection --date 2026-05-14
 ```
+
+命令说明：按指定日期实时计算选股结果并打印到终端。当前版本不会保存选股结果，只用于验证当天选股逻辑是否正常。
 
 或用 HTTP 触发：
 
@@ -169,8 +232,12 @@ tail -f /opt/dafuweng/server/logs/server.log
 
 服务端当前只保留 `old_cat`，也就是“老猫战法”：
 
-- 涨停板次日开盘 1 分钟后观察价格
-- 当前数据结构先使用 `next_open` 承载该价格；接真实行情后建议写入次日 `09:31` 价格
-- 如果该价格相对涨停日收盘价涨幅不超过 3%，买入
-- 止损价为涨停板当天的成交分时均价
-- 触发止损则卖出，否则持有到请求里的 `holding_days` 后卖出
+- 选涨停板时排除一字板
+- 涨停后第二个交易日不买
+- 涨停后第三个交易日开盘检查价格
+- 如果第三个交易日开盘价相对涨停日收盘价涨幅不超过 5%，按纪律买入
+- 止损价为涨停板当天的分时均线止损价
+- 单日最多买入 3 只股票
+- 超过 3 只候选时，按最近 5 个交易日累计涨幅从小到大排序买入
+- 资金不足买入 100 股时不买，不做虚假交易
+- 回测结果只返回给 APP，不保存到服务端

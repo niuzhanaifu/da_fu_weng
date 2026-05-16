@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .db import connect, init_db
-from .repository import upsert_daily_quotes
+from .repository import clear_selection_results, upsert_daily_quotes
 from .sample_data import sample_quotes
 from .schemas import DailyQuoteIn, MarketBoard, MinuteTrade
 from .service import DEFAULT_INDICATORS, run_daily_selection, sync_tushare_quotes
@@ -19,6 +19,7 @@ def main() -> None:
 
     subparsers.add_parser("init-db")
     subparsers.add_parser("seed-sample")
+    subparsers.add_parser("clear-derived-data")
 
     daily = subparsers.add_parser("run-daily-selection")
     daily.add_argument("--date", dest="trade_date", default=None)
@@ -45,6 +46,9 @@ def main() -> None:
         if args.command == "seed-sample":
             count = upsert_daily_quotes(conn, sample_quotes())
             print(f"seeded {count} quotes")
+        elif args.command == "clear-derived-data":
+            count = clear_selection_results(conn)
+            print(f"cleared {count} saved selection rows")
         elif args.command == "run-daily-selection":
             indicators = [item for item in args.indicators.split(",") if item]
             result = run_daily_selection(conn, args.trade_date, indicators)

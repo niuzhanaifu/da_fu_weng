@@ -55,6 +55,8 @@ def select_limit_up(quotes: Iterable[DailyQuoteIn], indicator_ids: Sequence[str]
             continue
         if not is_limit_up(quote):
             continue
+        if is_one_word_limit_up(quote):
+            continue
         if not matches_indicators(quote, ids):
             continue
         result.append(to_pick(quote))
@@ -65,6 +67,14 @@ def select_limit_up(quotes: Iterable[DailyQuoteIn], indicator_ids: Sequence[str]
 def is_limit_up(quote: DailyQuoteIn) -> bool:
     expected = quote.previous_close * (1.0 + quote.board.limit_up_rate)
     return quote.close >= expected - 0.02 and quote.close >= quote.high - 0.02
+
+
+def is_one_word_limit_up(quote: DailyQuoteIn) -> bool:
+    return (
+        abs(quote.open - quote.close) <= 0.01
+        and abs(quote.high - quote.close) <= 0.01
+        and abs(quote.low - quote.close) <= 0.01
+    )
 
 
 def matches_indicators(quote: DailyQuoteIn, indicator_ids: set[str]) -> bool:

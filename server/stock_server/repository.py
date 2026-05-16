@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Iterable, Sequence
+from typing import Iterable
 
 from .schemas import DailyCandleOut, DailyQuoteIn, MarketBoard, MinuteTrade, StockPickOut
-from .strategy import PickSnapshot
 
 
 def upsert_daily_quotes(conn: sqlite3.Connection, quotes: Iterable[DailyQuoteIn]) -> int:
@@ -156,6 +155,19 @@ def future_bars(
     ).fetchall()
 
 
+def latest_quote_for_code(conn: sqlite3.Connection, code: str) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT trade_date, close
+        FROM daily_quotes
+        WHERE code = ?
+        ORDER BY trade_date DESC
+        LIMIT 1
+        """,
+        (code,),
+    ).fetchone()
+
+
 def recent_change_percent(
     conn: sqlite3.Connection,
     code: str,
@@ -182,51 +194,15 @@ def recent_change_percent(
     return (latest - base) / base * 100.0
 
 
-def save_selection_run(
-    conn: sqlite3.Connection,
-    trade_date: str,
-    indicator_ids: Sequence[str],
-    picks: Sequence[PickSnapshot],
-) -> tuple[int, str]:
-    cursor = conn.execute(
-        """
-        INSERT INTO selection_runs (trade_date, indicator_ids_json)
-        VALUES (?, ?)
-        """,
-        (trade_date, json.dumps(list(indicator_ids), ensure_ascii=False)),
-    )
-    run_id = int(cursor.lastrowid)
-    conn.executemany(
-        """
-        INSERT INTO stock_picks (
-            run_id, trade_date, code, name, board, concept, close, change_percent, volume_ratio,
-            turnover_rate, sealed_amount_wan, stop_loss_price, next_open, future_closes_json
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        [
-            (
-                run_id,
-                pick.trade_date,
-                pick.code,
-                pick.name,
-                pick.board.value,
-                pick.concept,
-                pick.close,
-                pick.change_percent,
-                pick.volume_ratio,
-                pick.turnover_rate,
-                pick.sealed_amount_wan,
-                pick.stop_loss_price,
-                pick.next_open,
-                json.dumps(pick.future_closes, ensure_ascii=False),
-            )
-            for pick in picks
-        ],
-    )
+def clear_selection_results(conn: sqlite3.Connection) -> int:
+    pick_count = conn.execute("SELECT COUNT(*) AS count FROM stock_picks").fetchone()["count"]
+    run_count = conn.execute("SELECT COUNT(*) AS count FROM selection_runs").fetchone()["count"]
+    conn.execute("DELETE FROM stock_picks")
+    conn.execute("DELETE FROM selection_runs")
     conn.commit()
-    row = conn.execute("SELECT generated_at FROM selection_runs WHERE id = ?", (run_id,)).fetchone()
-    return run_id, row["generated_at"]
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.execute("VACUUM")
+    return int(pick_count) + int(run_count)
 
 
 def latest_run_for_date(conn: sqlite3.Connection, trade_date: str | None = None) -> sqlite3.Row | None:
@@ -343,8 +319,6 @@ def row_to_quote(conn: sqlite3.Connection, row: sqlite3.Row) -> DailyQuoteIn:
         sealed_amount_wan=row["sealed_amount_wan"],
         next_open=row["next_open"],
         future_closes=json.loads(row["future_closes_json"]),
-        future_dates=[],
-        recent_3day_change_percent=0.0,
         minute_trades=[
             MinuteTrade(minute=item["minute"], price=item["price"], volume=item["volume"])
             for item in minute_rows
@@ -363,6 +337,7 @@ def row_to_pick(conn: sqlite3.Connection, row: sqlite3.Row) -> StockPickOut:
         (row["trade_date"], row["code"]),
     ).fetchall()
     board = MarketBoard(row["board"])
+    latest = latest_quote_for_code(conn, row["code"])
     return StockPickOut(
         trade_date=row["trade_date"],
         code=row["code"],
@@ -376,10 +351,14 @@ def row_to_pick(conn: sqlite3.Connection, row: sqlite3.Row) -> StockPickOut:
         turnover_rate=row["turnover_rate"],
         sealed_amount_wan=row["sealed_amount_wan"],
         stop_loss_price=row["stop_loss_price"],
+        latest_trade_date=latest["trade_date"] if latest else None,
+        latest_close=latest["close"] if latest else None,
         next_open=row["next_open"],
         future_closes=json.loads(row["future_closes_json"]),
+        future_opens=[],
         future_dates=[],
         recent_3day_change_percent=0.0,
+        recent_5day_change_percent=0.0,
         minute_trades=[
             MinuteTrade(minute=item["minute"], price=item["price"], volume=item["volume"])
             for item in minute_rows

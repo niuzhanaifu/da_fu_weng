@@ -63,6 +63,8 @@ data class StockPick(
     val turnoverRate: Double,
     val sealedAmountWan: Double,
     val stopLossPrice: Double,
+    val latestTradeDate: String? = null,
+    val latestClose: Double? = null,
     val minuteTrades: List<MinuteTrade>,
     val nextOpen: Double,
     val futureCloses: List<Double>,
@@ -94,6 +96,11 @@ data class BacktestTrade(
     val exitReason: String
 )
 
+data class EquityPoint(
+    val date: String,
+    val capital: Double
+)
+
 data class BacktestResult(
     val initialCapital: Double = 0.0,
     val finalCapital: Double = 0.0,
@@ -101,7 +108,8 @@ data class BacktestResult(
     val winRate: Double,
     val totalReturnPercent: Double,
     val maxDrawdownPercent: Double,
-    val trades: List<BacktestTrade>
+    val trades: List<BacktestTrade>,
+    val equityCurve: List<EquityPoint> = emptyList()
 )
 
 enum class BacktestStrategy(
@@ -112,7 +120,7 @@ enum class BacktestStrategy(
     OldCat(
         id = "old_cat",
         title = "老猫战法",
-        description = "涨停板次日开盘 1 分钟后，如果价格相对涨停日收盘价涨幅不超过 3% 就买入；止损价为涨停板当天成交分时均价。"
+        description = "排除一字涨停板；涨停后第三个交易日开盘检查，若相对涨停日收盘价涨幅不超过 5% 则按纪律买入，分时均线作为止损价。"
     )
 }
 
