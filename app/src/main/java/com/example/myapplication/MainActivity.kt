@@ -66,6 +66,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myapplication.logging.AppLogger
+import com.example.myapplication.market.BacktestHistoryEntry
 import com.example.myapplication.market.BacktestResult
 import com.example.myapplication.market.BacktestStrategy
 import com.example.myapplication.market.BacktestTrade
@@ -80,11 +81,13 @@ import com.example.myapplication.market.StockSelectionEngine
 import com.example.myapplication.market.asPercent
 import com.example.myapplication.market.asPrice
 import com.example.myapplication.network.MarketApiClient
+import com.example.myapplication.storage.BacktestHistoryStore
 import com.example.myapplication.storage.SelectionCache
 import com.example.myapplication.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -492,6 +495,7 @@ private fun ClearDataCard(
 
 @Composable
 private fun BacktestPage(groups: List<DailyPickGroup>) {
+    val context = LocalContext.current
     var holdingDays by remember { mutableIntStateOf(3) }
     var initialCapitalText by remember { mutableStateOf("100000") }
     var boardFilter by remember { mutableStateOf(PickBoardFilter.All) }
@@ -503,6 +507,8 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
     var showDoneDialog by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<BacktestResult?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var history by remember { mutableStateOf(BacktestHistoryStore.loadAll(context)) }
+    var selectedHistoryId by remember { mutableStateOf<String?>(null) }
     val normalizedStart = minOf(startDate, endDate)
     val normalizedEnd = maxOf(startDate, endDate)
 
@@ -515,19 +521,36 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
         AppLogger.i("Backtest", "started remote strategy=${selectedStrategy.id} range=$normalizedStart..$normalizedEnd holdingDays=$holdingDays capital=$initialCapital")
         delay(350)
         try {
-            result = MarketApiClient.runOldCatBacktest(
+            val board = when (boardFilter) {
+                PickBoardFilter.All -> null
+                PickBoardFilter.Main -> MarketBoard.Main
+                PickBoardFilter.ChiNext -> MarketBoard.ChiNext
+            }
+            val currentResult = MarketApiClient.runOldCatBacktest(
                 startDate = normalizedStart.ifEmpty { null },
                 endDate = normalizedEnd.ifEmpty { null },
                 holdingDays = holdingDays,
                 initialCapital = initialCapital,
-                board = when (boardFilter) {
-                    PickBoardFilter.All -> null
-                    PickBoardFilter.Main -> MarketBoard.Main
-                    PickBoardFilter.ChiNext -> MarketBoard.ChiNext
-                }
+                board = board
             )
+            result = currentResult
+            val entry = BacktestHistoryEntry(
+                id = "backtest-${System.currentTimeMillis()}",
+                createdAt = nowDateTimeString(),
+                strategyId = selectedStrategy.id,
+                strategyName = selectedStrategy.title,
+                startDate = normalizedStart,
+                endDate = normalizedEnd,
+                holdingDays = holdingDays,
+                initialCapital = initialCapital,
+                board = board,
+                result = currentResult
+            )
+            BacktestHistoryStore.save(context, entry)
+            history = BacktestHistoryStore.loadAll(context)
+            selectedHistoryId = entry.id
             showDoneDialog = true
-            AppLogger.i("Backtest", "remote finished trades=${result?.totalTrades}")
+            AppLogger.i("Backtest", "remote finished trades=${currentResult.totalTrades} savedHistory=${entry.id}")
         } catch (error: Exception) {
             result = null
             errorMessage = error.message ?: "服务端请求失败"
@@ -599,6 +622,33 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                 onRun = { runRequest += 1 }
             )
         }
+        item {
+            BacktestHistoryList(
+                history = history,
+                selectedId = selectedHistoryId,
+                onOpen = { entry ->
+                    selectedHistoryId = entry.id
+                    result = entry.result
+                    startDate = entry.startDate
+                    endDate = entry.endDate
+                    holdingDays = entry.holdingDays
+                    initialCapitalText = entry.initialCapital.toString()
+                    boardFilter = when (entry.board) {
+                        MarketBoard.Main -> PickBoardFilter.Main
+                        MarketBoard.ChiNext -> PickBoardFilter.ChiNext
+                        null -> PickBoardFilter.All
+                    }
+                },
+                onDelete = { entry ->
+                    BacktestHistoryStore.delete(context, entry.id)
+                    history = BacktestHistoryStore.loadAll(context)
+                    if (selectedHistoryId == entry.id) {
+                        selectedHistoryId = null
+                        result = null
+                    }
+                }
+            )
+        }
         if (isRunning) {
             item { BacktestProgressCard() }
         }
@@ -643,6 +693,7 @@ private fun IndicatorsPage(
                 message = clearMessage,
                 onClear = {
                     SelectionCache.clear(context)
+                    BacktestHistoryStore.clear(context)
                     AppLogger.clearLocalData(context)
                     onClearData()
                     clearMessage = "本地日志和缓存已清除。"
@@ -927,12 +978,12 @@ private fun BacktestControls(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth()
             )
-            Text("最大持有天数：$holdingDays 天", color = Muted, fontSize = 13.sp)
+            Text("最大持有天数：$holdingDays 个工作日", color = Muted, fontSize = 13.sp)
             Slider(
                 value = holdingDays.toFloat(),
-                onValueChange = { onHoldingDays(it.roundToInt().coerceIn(1, 5)) },
-                valueRange = 1f..5f,
-                steps = 3
+                onValueChange = { onHoldingDays(it.roundToInt().coerceIn(1, 10)) },
+                valueRange = 1f..10f,
+                steps = 8
             )
             Button(
                 onClick = onRun,
@@ -962,6 +1013,84 @@ private fun BacktestProgressCard() {
             Column {
                 Text("正在回测", color = Ink, fontWeight = FontWeight.Bold)
                 Text("正在按选定区间生成交易和每日操作", color = Muted, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun BacktestHistoryList(
+    history: List<BacktestHistoryEntry>,
+    selectedId: String?,
+    onOpen: (BacktestHistoryEntry) -> Unit,
+    onDelete: (BacktestHistoryEntry) -> Unit
+) {
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = Panel),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("历史回测", color = Ink, fontWeight = FontWeight.Bold)
+            if (history.isEmpty()) {
+                Text("暂无本地回测记录。每次回测完成后会自动保存到手机本地。", color = Muted, fontSize = 13.sp)
+            } else {
+                history.forEach { entry ->
+                    BacktestHistoryRow(
+                        entry = entry,
+                        selected = entry.id == selectedId,
+                        onOpen = { onOpen(entry) },
+                        onDelete = { onDelete(entry) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BacktestHistoryRow(
+    entry: BacktestHistoryEntry,
+    selected: Boolean,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = if (selected) Color(0xFFFFF1F2) else Color(0xFFF8FAFC),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "${entry.strategyName} ${entry.startDate} 至 ${entry.endDate}",
+                    color = Ink,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "${entry.createdAt} · ${entry.board?.label ?: "全部"} · 持有${entry.holdingDays}个工作日 · ${entry.result.totalTrades}笔",
+                    color = Muted,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "累计收益 ${entry.result.totalReturnPercent.asPercent()} / 期末资金 ${entry.result.finalCapital.asPrice()}",
+                    color = profitColor(entry.result.totalReturnPercent),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            TextButton(onClick = onOpen) {
+                Text("查看")
+            }
+            TextButton(onClick = onDelete) {
+                Text("删除", color = FallGreen)
             }
         }
     }
@@ -1303,6 +1432,10 @@ private fun DateDropdown(
 
 private fun todayDateString(): String {
     return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().time)
+}
+
+private fun nowDateTimeString(): String {
+    return SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
 }
 
 private fun dateMonthsBefore(value: String, months: Int): String {

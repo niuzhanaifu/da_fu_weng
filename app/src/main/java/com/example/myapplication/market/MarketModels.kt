@@ -112,6 +112,19 @@ data class BacktestResult(
     val equityCurve: List<EquityPoint> = emptyList()
 )
 
+data class BacktestHistoryEntry(
+    val id: String,
+    val createdAt: String,
+    val strategyId: String,
+    val strategyName: String,
+    val startDate: String,
+    val endDate: String,
+    val holdingDays: Int,
+    val initialCapital: Double,
+    val board: MarketBoard?,
+    val result: BacktestResult
+)
+
 enum class BacktestStrategy(
     val id: String,
     val title: String,

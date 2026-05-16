@@ -107,7 +107,7 @@ class BacktestRequest(BaseModel):
     board: Optional[MarketBoard] = None
     initial_capital: float = Field(default=100000.0, ge=0.0)
     max_positions_per_day: int = Field(default=3, ge=1, le=20)
-    holding_days: int = Field(default=3, ge=1, le=20)
+    holding_days: int = Field(default=3, ge=1, le=10)
     take_profit_percent: float = Field(default=6.0, ge=0.1, le=50.0)
 
 
