@@ -12,6 +12,7 @@ from .logging_config import configure_logging
 from .repository import load_daily_candles, upsert_daily_quotes
 from .sample_data import sample_quotes
 from .schemas import (
+    BacktestExperimentOut,
     BacktestRequest,
     BacktestResultOut,
     DailyCandleOut,
@@ -21,7 +22,16 @@ from .schemas import (
     SelectionRequest,
     SelectionRunOut,
 )
-from .service import DEFAULT_INDICATORS, get_group, run_daily_selection, run_saved_backtest, run_selection_group, sync_tushare_quotes
+from .service import (
+    BACKTEST_PROFILES,
+    DEFAULT_INDICATORS,
+    get_group,
+    run_backtest_experiment,
+    run_daily_selection,
+    run_saved_backtest,
+    run_selection_group,
+    sync_tushare_quotes,
+)
 from .strategy import INDICATORS
 from .tushare_provider import TushareError, fetch_daily_quotes
 
@@ -47,10 +57,11 @@ def create_app() -> FastAPI:
     def backtest_strategies() -> list[dict[str, str]]:
         return [
             {
-                "id": "old_cat",
-                "name": "老猫战法",
-                "description": "排除一字涨停板；涨停后第三个交易日开盘检查，若相对涨停日收盘价涨幅不超过 5% 则按纪律买入，分时均线作为止损价；买入后涨幅达到 10% 强制平仓。",
+                "id": profile.id,
+                "name": profile.name,
+                "description": profile.description,
             }
+            for profile in BACKTEST_PROFILES.values()
         ]
 
     @app.post("/api/v1/admin/quotes", response_model=dict[str, int])
@@ -179,6 +190,24 @@ def create_app() -> FastAPI:
             result.win_rate,
             result.total_return_percent,
             result.max_drawdown_percent,
+            elapsed_ms,
+        )
+        return result
+
+    @app.post("/api/v1/backtests/experiments", response_model=BacktestExperimentOut)
+    def backtest_experiments(request: BacktestRequest, conn=Depends(get_db)) -> BacktestExperimentOut:
+        started_at = time.perf_counter()
+        try:
+            result = run_backtest_experiment(conn, request)
+        except (ValueError, TushareError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        logger.info(
+            "backtest experiment start_date=%s end_date=%s board=%s items=%s elapsed_ms=%s",
+            request.start_date,
+            request.end_date,
+            request.board.value if request.board else "all",
+            len(result.items),
             elapsed_ms,
         )
         return result

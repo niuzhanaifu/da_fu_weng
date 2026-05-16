@@ -112,6 +112,7 @@ class BacktestRequest(BaseModel):
     max_positions_per_day: int = Field(default=3, ge=1, le=20)
     holding_days: int = Field(default=3, ge=1, le=10)
     take_profit_percent: float = Field(default=10.0, ge=0.1, le=50.0)
+    allow_below_market_ma25: bool = True
 
 
 class BacktestTradeOut(BaseModel):
@@ -144,6 +145,20 @@ class BacktestResultOut(BaseModel):
     max_drawdown_percent: float
     trades: List[BacktestTradeOut]
     equity_curve: List[EquityPointOut] = Field(default_factory=list)
+
+
+class BacktestExperimentItemOut(BaseModel):
+    strategy_id: str
+    strategy_name: str
+    description: str
+    result: BacktestResultOut
+
+
+class BacktestExperimentOut(BaseModel):
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    board: Optional[MarketBoard] = None
+    items: List[BacktestExperimentItemOut]
 
 
 class SelectionRunOut(BaseModel):

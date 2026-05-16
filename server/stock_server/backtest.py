@@ -21,7 +21,7 @@ class OldCatStrategy:
     id: str = "old_cat"
 
     def simulate_trade(self, pick: StockPickOut, holding_days: int, take_profit_percent: float) -> BacktestTradeOut | None:
-        if len(pick.future_opens) < 2 or len(pick.future_closes) < 2 or len(pick.future_dates) < 2:
+        if len(pick.future_opens) < 3 or len(pick.future_closes) < 3 or len(pick.future_dates) < 3:
             return None
 
         buy_price = pick.future_opens[1]
@@ -30,9 +30,10 @@ class OldCatStrategy:
         if buy_price > pick.close * 1.05:
             return None
 
-        future_closes = pick.future_closes[1 : 1 + max(1, holding_days)]
-        future_highs = pick.future_highs[1 : 1 + len(future_closes)]
-        future_dates = pick.future_dates[1 : 1 + len(future_closes)]
+        sell_window_end = 2 + max(1, holding_days)
+        future_closes = pick.future_closes[2:sell_window_end]
+        future_highs = pick.future_highs[2 : 2 + len(future_closes)]
+        future_dates = pick.future_dates[2 : 2 + len(future_closes)]
         if not future_closes:
             return None
 
@@ -58,7 +59,7 @@ class OldCatStrategy:
             code=pick.code,
             name=pick.name,
             board=pick.board,
-            buy_date=future_dates[0],
+            buy_date=pick.future_dates[1],
             sell_date=future_dates[sell_index] if sell_index < len(future_dates) else f"T+{sell_index + 1}",
             buy_price=buy_price,
             sell_price=sell_price,

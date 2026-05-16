@@ -70,6 +70,23 @@ def upsert_daily_quotes(conn: sqlite3.Connection, quotes: Iterable[DailyQuoteIn]
     return count
 
 
+def upsert_market_index_quotes(conn: sqlite3.Connection, quotes: Iterable[tuple[str, str, float]]) -> int:
+    count = 0
+    for trade_date, code, close in quotes:
+        conn.execute(
+            """
+            INSERT INTO market_index_quotes (trade_date, code, close)
+            VALUES (?, ?, ?)
+            ON CONFLICT(trade_date, code) DO UPDATE SET
+                close=excluded.close
+            """,
+            (trade_date, code, close),
+        )
+        count += 1
+    conn.commit()
+    return count
+
+
 def load_quotes(conn: sqlite3.Connection, trade_date: str) -> list[DailyQuoteIn]:
     rows = conn.execute(
         """
@@ -180,6 +197,39 @@ def latest_quote_for_code(conn: sqlite3.Connection, code: str) -> sqlite3.Row | 
         """,
         (code,),
     ).fetchone()
+
+
+def previous_quote_for_code(conn: sqlite3.Connection, code: str, trade_date: str) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT board, previous_close, high, close
+        FROM daily_quotes
+        WHERE code = ?
+          AND trade_date < ?
+        ORDER BY trade_date DESC
+        LIMIT 1
+        """,
+        (code, trade_date),
+    ).fetchone()
+
+
+def market_index_above_ma25(conn: sqlite3.Connection, code: str, trade_date: str) -> bool:
+    rows = conn.execute(
+        """
+        SELECT close
+        FROM market_index_quotes
+        WHERE code = ?
+          AND trade_date <= ?
+        ORDER BY trade_date DESC
+        LIMIT 25
+        """,
+        (code, trade_date),
+    ).fetchall()
+    if len(rows) < 25:
+        return True
+    latest = rows[0]["close"]
+    ma25 = sum(row["close"] for row in rows) / len(rows)
+    return latest >= ma25
 
 
 def recent_change_percent(

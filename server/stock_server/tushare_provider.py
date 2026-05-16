@@ -41,6 +41,29 @@ def fetch_daily_quotes_range(start_date: str, end_date: str) -> list[DailyQuoteI
     return quotes
 
 
+def fetch_market_index_quotes_range(start_date: str, end_date: str) -> list[tuple[str, str, float]]:
+    token = settings.tushare_token.strip()
+    if not token:
+        raise TushareError("TUSHARE_TOKEN is not configured.")
+
+    rows = call_tushare(
+        token,
+        "index_daily",
+        {
+            "ts_code": "000001.SH",
+            "start_date": to_tushare_date(start_date),
+            "end_date": to_tushare_date(end_date),
+        },
+        "ts_code,trade_date,close",
+    )
+    quotes = [
+        (from_tushare_date(str(row["trade_date"])), str(row["ts_code"]), as_float(row.get("close")))
+        for row in rows
+    ]
+    logger.info("fetched tushare index quotes start_date=%s end_date=%s count=%s", start_date, end_date, len(quotes))
+    return quotes
+
+
 def fetch_daily_quotes_for_date(
     token: str,
     basics: dict[str, dict[str, Any]],

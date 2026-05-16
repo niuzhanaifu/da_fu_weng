@@ -1,6 +1,8 @@
 package com.example.myapplication.network
 
 import com.example.myapplication.market.BacktestResult
+import com.example.myapplication.market.BacktestExperimentItem
+import com.example.myapplication.market.BacktestExperimentResult
 import com.example.myapplication.market.BacktestTrade
 import com.example.myapplication.market.DailyPickGroup
 import com.example.myapplication.market.EquityPoint
@@ -25,6 +27,8 @@ object MarketApiClient {
         endDate: String?,
         holdingDays: Int,
         initialCapital: Double,
+        takeProfitPercent: Double,
+        allowBelowMarketMa25: Boolean,
         board: MarketBoard?,
         maxPositionsPerDay: Int = 3
     ): BacktestResult = withContext(Dispatchers.IO) {
@@ -34,11 +38,36 @@ object MarketApiClient {
             put("initial_capital", initialCapital)
             put("max_positions_per_day", maxPositionsPerDay)
             board?.let { put("board", if (it == MarketBoard.ChiNext) "chinext" else "main") }
-            put("take_profit_percent", 10.0)
+            put("take_profit_percent", takeProfitPercent)
+            put("allow_below_market_ma25", allowBelowMarketMa25)
             if (!startDate.isNullOrBlank()) put("start_date", startDate)
             if (!endDate.isNullOrBlank()) put("end_date", endDate)
         }
         postJson("/api/v1/backtests", payload, readTimeoutMs = 120_000).toBacktestResult()
+    }
+
+    suspend fun runBacktestExperiments(
+        startDate: String?,
+        endDate: String?,
+        holdingDays: Int,
+        initialCapital: Double,
+        takeProfitPercent: Double,
+        allowBelowMarketMa25: Boolean,
+        board: MarketBoard?,
+        maxPositionsPerDay: Int = 3
+    ): BacktestExperimentResult = withContext(Dispatchers.IO) {
+        val payload = JSONObject().apply {
+            put("strategy_id", "old_cat")
+            put("holding_days", holdingDays)
+            put("initial_capital", initialCapital)
+            put("max_positions_per_day", maxPositionsPerDay)
+            put("take_profit_percent", takeProfitPercent)
+            put("allow_below_market_ma25", allowBelowMarketMa25)
+            board?.let { put("board", if (it == MarketBoard.ChiNext) "chinext" else "main") }
+            if (!startDate.isNullOrBlank()) put("start_date", startDate)
+            if (!endDate.isNullOrBlank()) put("end_date", endDate)
+        }
+        postJson("/api/v1/backtests/experiments", payload, readTimeoutMs = 180_000).toExperimentResult()
     }
 
     suspend fun runSelection(
@@ -120,6 +149,24 @@ object MarketApiClient {
             trades = trades,
             equityCurve = equityCurve
         )
+    }
+
+    private fun JSONObject.toExperimentResult(): BacktestExperimentResult {
+        val itemArray = getJSONArray("items")
+        val items = buildList {
+            for (index in 0 until itemArray.length()) {
+                val item = itemArray.getJSONObject(index)
+                add(
+                    BacktestExperimentItem(
+                        strategyId = item.getString("strategy_id"),
+                        strategyName = item.getString("strategy_name"),
+                        description = item.optString("description"),
+                        result = item.getJSONObject("result").toBacktestResult()
+                    )
+                )
+            }
+        }
+        return BacktestExperimentResult(items = items)
     }
 
     private fun JSONObject.toDailyPickGroup(): DailyPickGroup {

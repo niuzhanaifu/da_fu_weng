@@ -67,6 +67,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myapplication.logging.AppLogger
 import com.example.myapplication.market.BacktestHistoryEntry
+import com.example.myapplication.market.BacktestExperimentItem
+import com.example.myapplication.market.BacktestExperimentResult
 import com.example.myapplication.market.BacktestResult
 import com.example.myapplication.market.BacktestStrategy
 import com.example.myapplication.market.BacktestTrade
@@ -501,15 +503,21 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
     val context = LocalContext.current
     var holdingDays by remember { mutableIntStateOf(3) }
     var initialCapitalText by remember { mutableStateOf("100000") }
+    var takeProfitText by remember { mutableStateOf("10") }
+    var allowBelowMarketMa25 by remember { mutableStateOf(true) }
     var boardFilter by remember { mutableStateOf(PickBoardFilter.All) }
     val selectedStrategy = BacktestStrategy.OldCat
     var startDate by remember { mutableStateOf(dateMonthsBefore(todayDateString(), 3)) }
     var endDate by remember { mutableStateOf(todayDateString()) }
     var runRequest by remember { mutableIntStateOf(0) }
+    var experimentRequest by remember { mutableIntStateOf(0) }
     var isRunning by remember { mutableStateOf(false) }
+    var isExperimentRunning by remember { mutableStateOf(false) }
     var showDoneDialog by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<BacktestResult?>(null) }
+    var experimentResult by remember { mutableStateOf<BacktestExperimentResult?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var experimentError by remember { mutableStateOf<String?>(null) }
     var history by remember { mutableStateOf(BacktestHistoryStore.loadAll(context)) }
     var selectedHistoryId by remember { mutableStateOf<String?>(null) }
     val normalizedStart = minOf(startDate, endDate)
@@ -521,6 +529,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
         showDoneDialog = false
         errorMessage = null
         val initialCapital = initialCapitalText.toDoubleOrNull() ?: 0.0
+        val takeProfitPercent = takeProfitText.toDoubleOrNull() ?: 10.0
         AppLogger.i("Backtest", "started remote strategy=${selectedStrategy.id} range=$normalizedStart..$normalizedEnd holdingDays=$holdingDays capital=$initialCapital")
         delay(350)
         try {
@@ -534,6 +543,8 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                 endDate = normalizedEnd.ifEmpty { null },
                 holdingDays = holdingDays,
                 initialCapital = initialCapital,
+                takeProfitPercent = takeProfitPercent,
+                allowBelowMarketMa25 = allowBelowMarketMa25,
                 board = board
             )
             result = currentResult
@@ -560,6 +571,37 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
             AppLogger.e("Backtest", "remote failed", error)
         } finally {
             isRunning = false
+        }
+    }
+
+    LaunchedEffect(experimentRequest) {
+        if (experimentRequest == 0) return@LaunchedEffect
+        isExperimentRunning = true
+        experimentError = null
+        val initialCapital = initialCapitalText.toDoubleOrNull() ?: 0.0
+        val takeProfitPercent = takeProfitText.toDoubleOrNull() ?: 10.0
+        delay(350)
+        try {
+            experimentResult = MarketApiClient.runBacktestExperiments(
+                startDate = normalizedStart.ifEmpty { null },
+                endDate = normalizedEnd.ifEmpty { null },
+                holdingDays = holdingDays,
+                initialCapital = initialCapital,
+                takeProfitPercent = takeProfitPercent,
+                allowBelowMarketMa25 = allowBelowMarketMa25,
+                board = when (boardFilter) {
+                    PickBoardFilter.All -> null
+                    PickBoardFilter.Main -> MarketBoard.Main
+                    PickBoardFilter.ChiNext -> MarketBoard.ChiNext
+                }
+            )
+            AppLogger.i("Backtest", "experiment finished items=${experimentResult?.items?.size}")
+        } catch (error: Exception) {
+            experimentResult = null
+            experimentError = error.message ?: "服务端策略实验失败"
+            AppLogger.e("Backtest", "experiment failed", error)
+        } finally {
+            isExperimentRunning = false
         }
     }
 
@@ -616,13 +658,29 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
             BacktestControls(
                 holdingDays = holdingDays,
                 initialCapitalText = initialCapitalText,
+                takeProfitText = takeProfitText,
+                allowBelowMarketMa25 = allowBelowMarketMa25,
                 onHoldingDays = {
                     AppLogger.d("Backtest", "holdingDays changed=$it")
                     holdingDays = it
                 },
                 onInitialCapital = { initialCapitalText = it },
+                onTakeProfit = { takeProfitText = it },
+                onAllowBelowMarketMa25 = { allowBelowMarketMa25 = it },
                 isRunning = isRunning,
                 onRun = { runRequest += 1 }
+            )
+        }
+        item {
+            BacktestExperimentCard(
+                result = experimentResult,
+                error = experimentError,
+                isRunning = isExperimentRunning,
+                onRun = { experimentRequest += 1 },
+                onOpen = { item ->
+                    selectedHistoryId = null
+                    result = item.result
+                }
             )
         }
         item {
@@ -965,8 +1023,12 @@ private fun StrategyControls(
 private fun BacktestControls(
     holdingDays: Int,
     initialCapitalText: String,
+    takeProfitText: String,
+    allowBelowMarketMa25: Boolean,
     onHoldingDays: (Int) -> Unit,
     onInitialCapital: (String) -> Unit,
+    onTakeProfit: (String) -> Unit,
+    onAllowBelowMarketMa25: (Boolean) -> Unit,
     isRunning: Boolean,
     onRun: () -> Unit
 ) {
@@ -984,6 +1046,24 @@ private fun BacktestControls(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth()
             )
+            OutlinedTextField(
+                value = takeProfitText,
+                onValueChange = { raw -> onTakeProfit(raw.filter { it.isDigit() || it == '.' }.take(5)) },
+                label = { Text("止盈率 %") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("大盘跌破 25 日均线仍允许买入", color = Ink, fontWeight = FontWeight.Bold)
+                    Text("关闭后，服务端有指数数据时会过滤弱势大盘环境。", color = Muted, fontSize = 12.sp)
+                }
+                Switch(
+                    checked = allowBelowMarketMa25,
+                    onCheckedChange = onAllowBelowMarketMa25
+                )
+            }
             Text("最大持有天数：$holdingDays 个工作日", color = Muted, fontSize = 13.sp)
             Slider(
                 value = holdingDays.toFloat(),
@@ -993,7 +1073,9 @@ private fun BacktestControls(
             )
             Button(
                 onClick = onRun,
-                enabled = !isRunning && (initialCapitalText.toDoubleOrNull() ?: 0.0) > 0.0,
+                enabled = !isRunning &&
+                    (initialCapitalText.toDoubleOrNull() ?: 0.0) > 0.0 &&
+                    (takeProfitText.toDoubleOrNull() ?: 0.0) > 0.0,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(if (isRunning) "回测中" else "开始回测")
@@ -1019,6 +1101,74 @@ private fun BacktestProgressCard() {
             Column {
                 Text("正在回测", color = Ink, fontWeight = FontWeight.Bold)
                 Text("正在按选定区间生成交易和每日操作", color = Muted, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun BacktestExperimentCard(
+    result: BacktestExperimentResult?,
+    error: String?,
+    isRunning: Boolean,
+    onRun: () -> Unit,
+    onOpen: (BacktestExperimentItem) -> Unit
+) {
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = Panel),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("策略实验", color = Ink, fontWeight = FontWeight.Bold)
+                    Text("服务端一次回测多套老猫变体，按收益率排序。", color = Muted, fontSize = 12.sp)
+                }
+                if (isRunning) {
+                    CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 3.dp)
+                } else {
+                    TextButton(onClick = onRun) {
+                        Text("开始实验")
+                    }
+                }
+            }
+            error?.let {
+                Text("策略实验失败：$it", color = FallGreen, fontSize = 12.sp)
+            }
+            result?.items?.forEach { item ->
+                BacktestExperimentRow(item = item, onOpen = { onOpen(item) })
+            }
+        }
+    }
+}
+
+@Composable
+private fun BacktestExperimentRow(
+    item: BacktestExperimentItem,
+    onOpen: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = Color(0xFFF8FAFC),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(item.strategyName, color = Ink, fontWeight = FontWeight.Bold)
+                Text(item.description, color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+                Text(
+                    "收益 ${item.result.totalReturnPercent.asPercent()} · 回撤 ${item.result.maxDrawdownPercent.asPercent()} · 胜率 ${item.result.winRate.asPercent()} · ${item.result.totalTrades}笔",
+                    color = profitColor(item.result.totalReturnPercent),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            TextButton(onClick = onOpen) {
+                Text("查看")
             }
         }
     }

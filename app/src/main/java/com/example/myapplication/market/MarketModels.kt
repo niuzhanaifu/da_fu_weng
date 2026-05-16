@@ -127,6 +127,17 @@ data class BacktestHistoryEntry(
     val result: BacktestResult
 )
 
+data class BacktestExperimentItem(
+    val strategyId: String,
+    val strategyName: String,
+    val description: String,
+    val result: BacktestResult
+)
+
+data class BacktestExperimentResult(
+    val items: List<BacktestExperimentItem>
+)
+
 enum class BacktestStrategy(
     val id: String,
     val title: String,
@@ -135,7 +146,7 @@ enum class BacktestStrategy(
     OldCat(
         id = "old_cat",
         title = "老猫战法",
-        description = "排除一字涨停板；涨停后第三个交易日开盘检查，若相对涨停日收盘价涨幅不超过 5% 则按纪律买入；分时均线止损，涨幅达到 10% 强制平仓。"
+        description = "只做首板，排除一字涨停板；涨停后第三个交易日开盘检查，若相对涨停日收盘价涨幅不超过 5% 则按纪律买入；分时均线止损，涨幅达到 10% 强制平仓。"
     )
 }
 

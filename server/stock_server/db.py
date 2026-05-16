@@ -61,6 +61,14 @@ def init_db() -> None:
                 UNIQUE(trade_date, code, minute)
             );
 
+            CREATE TABLE IF NOT EXISTS market_index_quotes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_date TEXT NOT NULL,
+                code TEXT NOT NULL,
+                close REAL NOT NULL,
+                UNIQUE(trade_date, code)
+            );
+
             CREATE TABLE IF NOT EXISTS selection_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 trade_date TEXT NOT NULL,
@@ -89,6 +97,7 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_daily_quotes_date ON daily_quotes(trade_date);
             CREATE INDEX IF NOT EXISTS idx_daily_quotes_code_date ON daily_quotes(code, trade_date);
             CREATE INDEX IF NOT EXISTS idx_minute_trades_quote ON minute_trades(trade_date, code);
+            CREATE INDEX IF NOT EXISTS idx_market_index_quotes_code_date ON market_index_quotes(code, trade_date);
             CREATE INDEX IF NOT EXISTS idx_selection_runs_date ON selection_runs(trade_date, generated_at);
             CREATE INDEX IF NOT EXISTS idx_stock_picks_date ON stock_picks(trade_date);
             """
