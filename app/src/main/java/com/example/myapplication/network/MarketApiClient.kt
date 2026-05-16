@@ -43,7 +43,7 @@ object MarketApiClient {
             if (!startDate.isNullOrBlank()) put("start_date", startDate)
             if (!endDate.isNullOrBlank()) put("end_date", endDate)
         }
-        postJson("/api/v1/backtests", payload, readTimeoutMs = 120_000).toBacktestResult()
+        postJson("/api/v1/backtests", payload, readTimeoutMs = 300_000).toBacktestResult()
     }
 
     suspend fun runBacktestExperiments(
@@ -67,7 +67,7 @@ object MarketApiClient {
             if (!startDate.isNullOrBlank()) put("start_date", startDate)
             if (!endDate.isNullOrBlank()) put("end_date", endDate)
         }
-        postJson("/api/v1/backtests/experiments", payload, readTimeoutMs = 180_000).toExperimentResult()
+        postJson("/api/v1/backtests/experiments", payload, readTimeoutMs = 300_000).toExperimentResult()
     }
 
     suspend fun runSelection(

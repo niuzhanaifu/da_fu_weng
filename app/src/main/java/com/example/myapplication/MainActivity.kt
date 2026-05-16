@@ -7,6 +7,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -720,7 +721,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
             item { BacktestSummary(current) }
             item { EquityCurveChart(current.equityCurve) }
             item { DailyOperations(current.trades) }
-            items(current.trades) { trade ->
+            items(current.trades.sortedByDescending { it.profitAmount }) { trade ->
                 TradeCard(trade)
             }
         }
@@ -1272,6 +1273,7 @@ private fun BacktestSummary(result: BacktestResult) {
 
 @Composable
 private fun EquityCurveChart(points: List<EquityPoint>) {
+    var selectedIndex by remember(points) { mutableIntStateOf(points.lastIndex.coerceAtLeast(0)) }
     ElevatedCard(
         colors = CardDefaults.elevatedCardColors(containerColor = Panel),
         shape = RoundedCornerShape(8.dp)
@@ -1285,10 +1287,26 @@ private fun EquityCurveChart(points: List<EquityPoint>) {
             val minCapital = points.minOf { it.capital }
             val maxCapital = points.maxOf { it.capital }
             val range = max(1.0, maxCapital - minCapital)
+            val selectedPoint = points.getOrNull(selectedIndex)
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(180.dp)
+                    .pointerInput(points) {
+                        detectTapGestures { offset ->
+                            selectedIndex = curveIndexForOffset(offset.x, size.width, points.lastIndex)
+                        }
+                    }
+                    .pointerInput(points) {
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                selectedIndex = curveIndexForOffset(offset.x, size.width, points.lastIndex)
+                            },
+                            onDrag = { change, _ ->
+                                selectedIndex = curveIndexForOffset(change.position.x, size.width, points.lastIndex)
+                            }
+                        )
+                    }
             ) {
                 repeat(4) { index ->
                     val y = size.height * (index + 1) / 5f
@@ -1315,6 +1333,19 @@ private fun EquityCurveChart(points: List<EquityPoint>) {
                         cap = StrokeCap.Round
                     )
                 }
+                chartPoints.getOrNull(selectedIndex)?.let { point ->
+                    drawLine(
+                        color = RiseRed,
+                        start = Offset(point.x, 0f),
+                        end = Offset(point.x, size.height),
+                        strokeWidth = 1.5.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f))
+                    )
+                    drawCircle(color = RiseRed, radius = 4.dp.toPx(), center = point)
+                }
+            }
+            selectedPoint?.let {
+                Text("${it.date} 余额 ${it.capital.asPrice()}", color = Ink, fontWeight = FontWeight.Bold, fontSize = 13.sp)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(points.first().date, color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
@@ -1588,6 +1619,12 @@ private fun DateDropdown(
 
 private fun todayDateString(): String {
     return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().time)
+}
+
+private fun curveIndexForOffset(x: Float, width: Int, lastIndex: Int): Int {
+    if (lastIndex <= 0 || width <= 0) return 0
+    val step = width.toFloat() / lastIndex
+    return (x / step).roundToInt().coerceIn(0, lastIndex)
 }
 
 private fun nowDateTimeString(): String {

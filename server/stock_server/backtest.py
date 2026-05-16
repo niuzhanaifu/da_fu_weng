@@ -7,6 +7,8 @@ from .schemas import BacktestResultOut, BacktestTradeOut, EquityPointOut, StockP
 
 
 LOT_SIZE = 100
+RANK_MODE_RECENT_5DAY_CHANGE = "recent_5day_change"
+RANK_MODE_STOP_LOSS_LOSS = "stop_loss_loss"
 
 
 class BacktestStrategy(Protocol):
@@ -91,7 +93,7 @@ class OpenPosition:
 @dataclass(frozen=True)
 class PlannedTrade:
     trade: BacktestTradeOut
-    rank_change_percent: float
+    rank_value: float
 
 
 def run_backtest(
@@ -101,6 +103,7 @@ def run_backtest(
     strategy_id: str = "old_cat",
     initial_capital: float = 100000.0,
     max_positions_per_day: int = 3,
+    rank_mode: str = RANK_MODE_RECENT_5DAY_CHANGE,
 ) -> BacktestResultOut:
     strategy = STRATEGIES.get(strategy_id)
     if strategy is None:
@@ -127,7 +130,7 @@ def run_backtest(
                 planned_trades_by_date.setdefault(trade.buy_date, []).append(
                     PlannedTrade(
                         trade=trade,
-                        rank_change_percent=pick.recent_5day_change_percent,
+                        rank_value=trade_rank_value(pick, trade, rank_mode),
                     )
                 )
 
@@ -210,7 +213,21 @@ def rank_daily_picks(picks: Sequence[StockPickOut]) -> list[StockPickOut]:
 
 
 def rank_planned_trades(planned_trades: Sequence[PlannedTrade]) -> list[PlannedTrade]:
-    return sorted(planned_trades, key=lambda item: (item.rank_change_percent, item.trade.code))
+    return sorted(planned_trades, key=lambda item: (item.rank_value, item.trade.code))
+
+
+def trade_rank_value(pick: StockPickOut, trade: BacktestTradeOut, rank_mode: str) -> float:
+    if rank_mode == RANK_MODE_RECENT_5DAY_CHANGE:
+        return pick.recent_5day_change_percent
+    if rank_mode == RANK_MODE_STOP_LOSS_LOSS:
+        return stop_loss_loss_percent(trade)
+    raise ValueError(f"Unsupported backtest rank mode: {rank_mode}")
+
+
+def stop_loss_loss_percent(trade: BacktestTradeOut) -> float:
+    if trade.buy_price <= 0 or trade.stop_loss_price <= 0:
+        return float("inf")
+    return max(0.0, (trade.buy_price - trade.stop_loss_price) / trade.buy_price * 100.0)
 
 
 def close_due_positions(

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Sequence
 
 from . import repository
-from .backtest import run_backtest
+from .backtest import RANK_MODE_RECENT_5DAY_CHANGE, RANK_MODE_STOP_LOSS_LOSS, run_backtest
 from .schemas import (
     BacktestExperimentItemOut,
     BacktestExperimentOut,
@@ -37,15 +37,17 @@ class BacktestProfile:
     exclude_st: bool = True
     limit_shapes: set[str] | None = None
     engine_strategy_id: str = "old_cat"
+    rank_mode: str = RANK_MODE_RECENT_5DAY_CHANGE
 
 
 BACKTEST_PROFILES: dict[str, BacktestProfile] = {
     "old_cat": BacktestProfile(
         id="old_cat",
         name="老猫战法",
-        description="首板、非一字板；第三个交易日开盘涨幅不超过 5% 买入；10% 止盈，分时均线止损。",
+        description="首板且早上封板、非一字板；第三个交易日开盘涨幅不超过 5% 买入；10% 止盈，分时均线止损。",
         first_limit_only=True,
         exclude_st=True,
+        limit_shapes={"morning"},
     ),
     "old_cat_all_limit": BacktestProfile(
         id="old_cat_all_limit",
@@ -54,14 +56,6 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         first_limit_only=False,
         exclude_st=True,
     ),
-    "old_cat_morning_first": BacktestProfile(
-        id="old_cat_morning_first",
-        name="老猫对照：首板早盘",
-        description="只做首板且涨停形态为早上封板；其余买卖规则与老猫战法一致。",
-        first_limit_only=True,
-        exclude_st=True,
-        limit_shapes={"morning"},
-    ),
     "old_cat_clean_first": BacktestProfile(
         id="old_cat_clean_first",
         name="老猫对照：首板非炸板",
@@ -69,6 +63,15 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         first_limit_only=True,
         exclude_st=True,
         limit_shapes={"morning", "afternoon"},
+    ),
+    "old_cat_stop_loss_rank": BacktestProfile(
+        id="old_cat_stop_loss_rank",
+        name="老猫对照：止损率排序",
+        description="选股条件与老猫战法一致；超过 3 只候选时，优先买入到分时均线止损亏损比例最低的股票。",
+        first_limit_only=True,
+        exclude_st=True,
+        limit_shapes={"morning"},
+        rank_mode=RANK_MODE_STOP_LOSS_LOSS,
     ),
 }
 
@@ -124,9 +127,15 @@ def run_selection_group(
 
     indicators = list(indicator_ids or DEFAULT_INDICATORS)
     ensure_quotes_for_date(conn, selected_date)
-    snapshots = select_limit_up(repository.load_quotes(conn, selected_date), indicators)
+    candidate_date = date_days_before(selected_date, 1)
+    ensure_quotes_for_date(conn, candidate_date)
+    snapshots = select_limit_up(repository.load_quotes(conn, candidate_date), indicators)
     snapshots = apply_backtest_profile(conn, snapshots, BACKTEST_PROFILES["old_cat"])
-    picks = [snapshot_to_pick(conn, snapshot, holding_days=3) for snapshot in snapshots]
+    picks = [
+        pick
+        for pick in (snapshot_to_pick(conn, snapshot, holding_days=3) for snapshot in snapshots)
+        if is_old_cat_buy_candidate(pick, selected_date)
+    ]
     return DailyGroupOut(
         trade_date=selected_date,
         generated_at=current_timestamp(),
@@ -159,6 +168,7 @@ def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> Ba
         strategy_id=profile.engine_strategy_id,
         initial_capital=request.initial_capital,
         max_positions_per_day=request.max_positions_per_day,
+        rank_mode=profile.rank_mode,
     )
 
 
@@ -183,6 +193,7 @@ def run_backtest_experiment(conn: sqlite3.Connection, request: BacktestRequest) 
             strategy_id=profile.engine_strategy_id,
             initial_capital=request.initial_capital,
             max_positions_per_day=request.max_positions_per_day,
+            rank_mode=profile.rank_mode,
         )
         items.append(
             BacktestExperimentItemOut(
@@ -287,6 +298,15 @@ def is_first_limit_up(conn: sqlite3.Connection, snapshot: PickSnapshot) -> bool:
 def is_st_stock(name: str) -> bool:
     normalized = name.upper().replace(" ", "")
     return "ST" in normalized or "退" in normalized
+
+
+def is_old_cat_buy_candidate(pick: StockPickOut, decision_date: str) -> bool:
+    if len(pick.future_dates) < 2 or len(pick.future_opens) < 2:
+        return False
+    if pick.future_dates[0] != decision_date:
+        return False
+    buy_price = pick.future_opens[1]
+    return buy_price > 0 and buy_price <= pick.close * 1.05
 
 
 def market_above_ma25(conn: sqlite3.Connection, trade_date: str) -> bool:

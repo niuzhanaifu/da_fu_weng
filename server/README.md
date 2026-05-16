@@ -223,6 +223,7 @@ tail -f /opt/dafuweng/server/logs/server.log
 - `POST /api/v1/selections/run`
 - `GET /api/v1/stocks/{code}/candles`
 - `POST /api/v1/backtests`
+- `POST /api/v1/backtests/experiments`
 - `POST /api/v1/admin/quotes`
 - `POST /api/v1/admin/seed-sample`
 - `POST /api/v1/admin/sync-tushare`
@@ -230,9 +231,10 @@ tail -f /opt/dafuweng/server/logs/server.log
 
 ## 老猫战法
 
-服务端当前只保留 `old_cat`，也就是“老猫战法”：
+`old_cat` 是当前正式使用的“老猫战法”：
 
 - 选涨停板时排除一字板
+- 只做首板且涨停形态为早上封板
 - 涨停后第二个交易日不买
 - 涨停后第三个交易日开盘检查价格
 - 如果第三个交易日开盘价相对涨停日收盘价涨幅不超过 5%，按纪律买入
@@ -243,3 +245,14 @@ tail -f /opt/dafuweng/server/logs/server.log
 - 买入后涨幅达到 10% 时强制平仓
 - 选股结果会标注涨停形态：早上封板、下午封板、炸板涨停
 - 回测结果只返回给 APP，不保存到服务端
+
+按当前老猫战法执行某日选股时，服务端会回看前一天涨停股。例如执行 `2026-05-14` 的选股，会筛选 `2026-05-13` 的首板早盘涨停，并结合 `2026-05-14` 后续行情判断是否满足老猫战法的买入候选条件。选股和回测使用同一套服务端 profile。
+
+## 策略对比
+
+APP 触发 `/api/v1/backtests/experiments` 时，服务端会同时跑多组互不重复的老猫对照策略：
+
+- `old_cat`：正式老猫战法，首板、早上封板、非 ST、非一字板；超过 3 只时按最近 5 个交易日累计涨幅最低优先买入。
+- `old_cat_all_limit`：不限制首板，只排除一字板和 ST；买卖规则与老猫战法一致。
+- `old_cat_clean_first`：只做首板，排除炸板回封，只保留早上封板和下午封板；买卖规则与老猫战法一致。
+- `old_cat_stop_loss_rank`：选股条件与正式老猫战法一致；超过 3 只时按“买入价到分时均线止损价的亏损比例”从低到高排序，止损只亏 0.5% 的优先级高于止损要亏 3% 的。
