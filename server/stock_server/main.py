@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -162,17 +163,23 @@ def create_app() -> FastAPI:
 
     @app.post("/api/v1/backtests", response_model=BacktestResultOut)
     def backtest(request: BacktestRequest, conn=Depends(get_db)) -> BacktestResultOut:
+        started_at = time.perf_counter()
         try:
             result = run_saved_backtest(conn, request)
         except (ValueError, TushareError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(
-            "backtest strategy=%s trades=%s win_rate=%.2f return=%.2f max_drawdown=%.2f",
+            "backtest strategy=%s start_date=%s end_date=%s board=%s trades=%s win_rate=%.2f return=%.2f max_drawdown=%.2f elapsed_ms=%s",
             request.strategy_id,
+            request.start_date,
+            request.end_date,
+            request.board.value if request.board else "all",
             result.total_trades,
             result.win_rate,
             result.total_return_percent,
             result.max_drawdown_percent,
+            elapsed_ms,
         )
         return result
 

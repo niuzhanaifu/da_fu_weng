@@ -38,7 +38,7 @@ object MarketApiClient {
             if (!startDate.isNullOrBlank()) put("start_date", startDate)
             if (!endDate.isNullOrBlank()) put("end_date", endDate)
         }
-        postJson("/api/v1/backtests", payload).toBacktestResult()
+        postJson("/api/v1/backtests", payload, readTimeoutMs = 120_000).toBacktestResult()
     }
 
     suspend fun runSelection(
@@ -52,11 +52,11 @@ object MarketApiClient {
         postJson("/api/v1/selections/run", payload).toDailyPickGroup()
     }
 
-    private fun postJson(path: String, payload: JSONObject): JSONObject {
+    private fun postJson(path: String, payload: JSONObject, readTimeoutMs: Int = 15_000): JSONObject {
         val connection = (URL("$BASE_URL$path").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 8000
-            readTimeout = 15000
+            readTimeout = readTimeoutMs
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             setRequestProperty("Accept", "application/json")

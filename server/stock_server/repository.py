@@ -79,8 +79,22 @@ def load_quotes(conn: sqlite3.Connection, trade_date: str) -> list[DailyQuoteIn]
         """,
         (trade_date,),
     ).fetchall()
+    minute_rows = conn.execute(
+        """
+        SELECT code, minute, price, volume
+        FROM minute_trades
+        WHERE trade_date = ?
+        ORDER BY code, minute
+        """,
+        (trade_date,),
+    ).fetchall()
+    minutes_by_code: dict[str, list[MinuteTrade]] = {}
+    for item in minute_rows:
+        minutes_by_code.setdefault(item["code"], []).append(
+            MinuteTrade(minute=item["minute"], price=item["price"], volume=item["volume"])
+        )
 
-    return [row_to_quote(conn, row) for row in rows]
+    return [row_to_quote(row, minutes_by_code.get(row["code"], [])) for row in rows]
 
 
 def count_quotes(conn: sqlite3.Connection, trade_date: str) -> int:
@@ -293,16 +307,7 @@ def load_daily_candles(
     ][::-1]
 
 
-def row_to_quote(conn: sqlite3.Connection, row: sqlite3.Row) -> DailyQuoteIn:
-    minute_rows = conn.execute(
-        """
-        SELECT minute, price, volume
-        FROM minute_trades
-        WHERE trade_date = ? AND code = ?
-        ORDER BY minute
-        """,
-        (row["trade_date"], row["code"]),
-    ).fetchall()
+def row_to_quote(row: sqlite3.Row, minute_trades: list[MinuteTrade]) -> DailyQuoteIn:
     return DailyQuoteIn(
         trade_date=row["trade_date"],
         code=row["code"],
@@ -319,10 +324,7 @@ def row_to_quote(conn: sqlite3.Connection, row: sqlite3.Row) -> DailyQuoteIn:
         sealed_amount_wan=row["sealed_amount_wan"],
         next_open=row["next_open"],
         future_closes=json.loads(row["future_closes_json"]),
-        minute_trades=[
-            MinuteTrade(minute=item["minute"], price=item["price"], volume=item["volume"])
-            for item in minute_rows
-        ],
+        minute_trades=minute_trades,
     )
 
 
