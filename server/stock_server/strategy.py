@@ -43,6 +43,8 @@ class PickSnapshot:
     turnover_rate: float
     sealed_amount_wan: float
     stop_loss_price: float
+    limit_shape: str
+    limit_shape_label: str
     next_open: float | None
     future_closes: list[float]
 
@@ -91,6 +93,7 @@ def matches_indicators(quote: DailyQuoteIn, indicator_ids: set[str]) -> bool:
 
 
 def to_pick(quote: DailyQuoteIn) -> PickSnapshot:
+    shape, shape_label = limit_shape(quote)
     return PickSnapshot(
         trade_date=quote.trade_date,
         code=quote.code,
@@ -103,6 +106,8 @@ def to_pick(quote: DailyQuoteIn) -> PickSnapshot:
         turnover_rate=quote.turnover_rate,
         sealed_amount_wan=quote.sealed_amount_wan,
         stop_loss_price=stop_loss_price(quote),
+        limit_shape=shape,
+        limit_shape_label=shape_label,
         next_open=quote.next_open,
         future_closes=quote.future_closes,
     )
@@ -122,3 +127,41 @@ def stop_loss_price(quote: DailyQuoteIn) -> float:
     if vwap > 0:
         return vwap
     return (quote.open + quote.high + quote.low + quote.close) / 4.0
+
+
+def limit_shape(quote: DailyQuoteIn) -> tuple[str, str]:
+    limit_price = quote.previous_close * (1.0 + quote.board.limit_up_rate)
+    limit_minutes = [
+        trade.minute
+        for trade in quote.minute_trades
+        if minute_to_int(trade.minute) is not None and trade.price >= limit_price - 0.02
+    ]
+    if limit_minutes:
+        first = min(limit_minutes, key=lambda item: minute_to_int(item) or 0)
+        first_value = minute_to_int(first) or 0
+        broke_after_limit = any(
+            (minute_to_int(trade.minute) or 0) > first_value and trade.price < limit_price - 0.02
+            for trade in quote.minute_trades
+            if minute_to_int(trade.minute) is not None
+        )
+        if broke_after_limit:
+            return "resealed", "炸板涨停"
+        if first_value < 11 * 60 + 30:
+            return "morning", "早上封板"
+        return "afternoon", "下午封板"
+
+    if quote.open >= limit_price - 0.02 and quote.low < limit_price - 0.02:
+        return "resealed", "炸板涨停"
+    if quote.low <= quote.previous_close * (1.0 + quote.board.limit_up_rate * 0.45):
+        return "afternoon", "下午封板"
+    return "morning", "早上封板"
+
+
+def minute_to_int(value: str) -> int | None:
+    parts = value.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        return int(parts[0]) * 60 + int(parts[1])
+    except ValueError:
+        return None

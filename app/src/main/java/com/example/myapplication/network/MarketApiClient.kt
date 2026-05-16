@@ -34,7 +34,7 @@ object MarketApiClient {
             put("initial_capital", initialCapital)
             put("max_positions_per_day", maxPositionsPerDay)
             board?.let { put("board", if (it == MarketBoard.ChiNext) "chinext" else "main") }
-            put("take_profit_percent", 6.0)
+            put("take_profit_percent", 10.0)
             if (!startDate.isNullOrBlank()) put("start_date", startDate)
             if (!endDate.isNullOrBlank()) put("end_date", endDate)
         }
@@ -140,6 +140,8 @@ object MarketApiClient {
                         turnoverRate = item.getDouble("turnover_rate"),
                         sealedAmountWan = item.getDouble("sealed_amount_wan"),
                         stopLossPrice = item.getDouble("stop_loss_price"),
+                        limitShape = item.optString("limit_shape"),
+                        limitShapeLabel = item.optString("limit_shape_label"),
                         latestTradeDate = item.optString("latest_trade_date").ifBlank { null },
                         latestClose = if (item.isNull("latest_close")) null else item.getDouble("latest_close"),
                         minuteTrades = item.optJSONArray("minute_trades").toMinuteTrades(),

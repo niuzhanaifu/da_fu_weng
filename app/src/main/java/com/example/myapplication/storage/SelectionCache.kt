@@ -57,6 +57,8 @@ object SelectionCache {
             .put("turnover_rate", turnoverRate)
             .put("sealed_amount_wan", sealedAmountWan)
             .put("stop_loss_price", stopLossPrice)
+            .put("limit_shape", limitShape)
+            .put("limit_shape_label", limitShapeLabel)
             .put("latest_trade_date", latestTradeDate)
             .put("latest_close", latestClose)
             .put("next_open", nextOpen)
@@ -105,6 +107,8 @@ object SelectionCache {
             turnoverRate = getDouble("turnover_rate"),
             sealedAmountWan = getDouble("sealed_amount_wan"),
             stopLossPrice = getDouble("stop_loss_price"),
+            limitShape = optString("limit_shape"),
+            limitShapeLabel = optString("limit_shape_label"),
             latestTradeDate = optString("latest_trade_date").ifBlank { null },
             latestClose = if (isNull("latest_close")) null else getDouble("latest_close"),
             minuteTrades = optJSONArray("minute_trades").toMinuteTrades(),

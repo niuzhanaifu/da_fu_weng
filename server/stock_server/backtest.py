@@ -12,7 +12,7 @@ LOT_SIZE = 100
 class BacktestStrategy(Protocol):
     id: str
 
-    def simulate_trade(self, pick: StockPickOut, holding_days: int) -> BacktestTradeOut | None:
+    def simulate_trade(self, pick: StockPickOut, holding_days: int, take_profit_percent: float) -> BacktestTradeOut | None:
         ...
 
 
@@ -20,7 +20,7 @@ class BacktestStrategy(Protocol):
 class OldCatStrategy:
     id: str = "old_cat"
 
-    def simulate_trade(self, pick: StockPickOut, holding_days: int) -> BacktestTradeOut | None:
+    def simulate_trade(self, pick: StockPickOut, holding_days: int, take_profit_percent: float) -> BacktestTradeOut | None:
         if len(pick.future_opens) < 2 or len(pick.future_closes) < 2 or len(pick.future_dates) < 2:
             return None
 
@@ -31,6 +31,7 @@ class OldCatStrategy:
             return None
 
         future_closes = pick.future_closes[1 : 1 + max(1, holding_days)]
+        future_highs = pick.future_highs[1 : 1 + len(future_closes)]
         future_dates = pick.future_dates[1 : 1 + len(future_closes)]
         if not future_closes:
             return None
@@ -38,12 +39,19 @@ class OldCatStrategy:
         sell_price = future_closes[-1]
         sell_index = len(future_closes) - 1
         exit_reason = "老猫战法：持有到期"
+        take_profit_price = buy_price * (1.0 + take_profit_percent / 100.0)
 
         for index, close in enumerate(future_closes):
             if close <= pick.stop_loss_price:
                 sell_price = close
                 sell_index = index
                 exit_reason = "老猫战法：分时均价止损"
+                break
+            high = future_highs[index] if index < len(future_highs) else close
+            if high >= take_profit_price:
+                sell_price = take_profit_price
+                sell_index = index
+                exit_reason = f"老猫战法：涨幅达到{take_profit_percent:.0f}%强制平仓"
                 break
 
         return BacktestTradeOut(
@@ -109,7 +117,11 @@ def run_backtest(
     planned_trades_by_date: dict[str, list[PlannedTrade]] = {}
     for trade_date, day_picks in picks_by_date.items():
         for pick in rank_daily_picks(day_picks):
-            trade = strategy.simulate_trade(pick, holding_days=holding_days)
+            trade = strategy.simulate_trade(
+                pick,
+                holding_days=holding_days,
+                take_profit_percent=take_profit_percent,
+            )
             if trade is not None:
                 planned_trades_by_date.setdefault(trade.buy_date, []).append(
                     PlannedTrade(

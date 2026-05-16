@@ -63,6 +63,8 @@ data class StockPick(
     val turnoverRate: Double,
     val sealedAmountWan: Double,
     val stopLossPrice: Double,
+    val limitShape: String = "",
+    val limitShapeLabel: String = "",
     val latestTradeDate: String? = null,
     val latestClose: Double? = null,
     val minuteTrades: List<MinuteTrade>,
@@ -133,7 +135,7 @@ enum class BacktestStrategy(
     OldCat(
         id = "old_cat",
         title = "老猫战法",
-        description = "排除一字涨停板；涨停后第三个交易日开盘检查，若相对涨停日收盘价涨幅不超过 5% 则按纪律买入，分时均线作为止损价。"
+        description = "排除一字涨停板；涨停后第三个交易日开盘检查，若相对涨停日收盘价涨幅不超过 5% 则按纪律买入；分时均线止损，涨幅达到 10% 强制平仓。"
     )
 }
 

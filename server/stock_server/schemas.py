@@ -63,10 +63,13 @@ class StockPickOut(BaseModel):
     turnover_rate: float
     sealed_amount_wan: float
     stop_loss_price: float
+    limit_shape: str = ""
+    limit_shape_label: str = ""
     latest_trade_date: Optional[str] = None
     latest_close: Optional[float] = None
     next_open: Optional[float]
     future_closes: List[float]
+    future_highs: List[float] = Field(default_factory=list)
     future_opens: List[float] = Field(default_factory=list)
     future_dates: List[str] = Field(default_factory=list)
     recent_3day_change_percent: float = 0.0
@@ -108,7 +111,7 @@ class BacktestRequest(BaseModel):
     initial_capital: float = Field(default=100000.0, ge=0.0)
     max_positions_per_day: int = Field(default=3, ge=1, le=20)
     holding_days: int = Field(default=3, ge=1, le=10)
-    take_profit_percent: float = Field(default=6.0, ge=0.1, le=50.0)
+    take_profit_percent: float = Field(default=10.0, ge=0.1, le=50.0)
 
 
 class BacktestTradeOut(BaseModel):

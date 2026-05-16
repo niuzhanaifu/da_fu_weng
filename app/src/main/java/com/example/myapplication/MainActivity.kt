@@ -354,6 +354,9 @@ private fun StockDetailPage(
                         QuoteCell("涨幅", pick.changePercent.asPercent(), RiseRed, Modifier.weight(1f))
                         QuoteCell("分时均线止损", pick.stopLossPrice.asPrice(), FallGreen, Modifier.weight(1f))
                     }
+                    if (pick.limitShapeLabel.isNotBlank()) {
+                        Text("涨停形态：${pick.limitShapeLabel}", color = Color(0xFFCBD5E1), fontSize = 12.sp)
+                    }
                 }
             }
         }
@@ -756,6 +759,9 @@ private fun StockPickCard(
                 QuoteCell("收盘", pick.close.asPrice(), RiseRed, Modifier.weight(1f))
                 QuoteCell("分时均线止损", pick.stopLossPrice.asPrice(), FallGreen, Modifier.weight(1f))
                 QuoteCell("封单", "${pick.sealedAmountWan.roundToInt()}万", Ink, Modifier.weight(1f))
+            }
+            if (pick.limitShapeLabel.isNotBlank()) {
+                Text("涨停形态：${pick.limitShapeLabel}", color = Muted, fontSize = 12.sp)
             }
             pick.latestClose?.let { latest ->
                 Text("最新收盘 ${latest.asPrice()} / ${pick.latestTradeDate.orEmpty()}", color = Muted, fontSize = 12.sp)
