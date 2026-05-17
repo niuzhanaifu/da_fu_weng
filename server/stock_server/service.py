@@ -51,7 +51,7 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
     "old_cat": BacktestProfile(
         id="old_cat",
         name="老猫战法",
-        description="首板且早上封板、非一字板；第三个交易日开盘涨幅不超过 5% 买入；10% 止盈，分时均线止损。",
+        description="首板且早上封板、非 ST、非一字板；涨停日后第 2 个交易日开盘涨幅不超过 5% 买入；止盈率可设置，分时均线止损。",
         first_limit_only=True,
         exclude_st=True,
         limit_shapes={"morning"},
@@ -86,7 +86,7 @@ SELECTION_PROFILES: dict[str, SelectionProfile] = {
     "old_cat_buy": SelectionProfile(
         id="old_cat_buy",
         name="老猫买入",
-        description="回看上一个交易日的老猫涨停候选，结合选股日行情判断是否满足买入条件。",
+        description="回看上一交易日首板早上封板、非 ST、非一字板候选，按老猫买入条件筛选。",
     ),
     "limit_up_first": SelectionProfile(
         id="limit_up_first",

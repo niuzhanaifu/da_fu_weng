@@ -90,7 +90,7 @@ enum class SelectionStrategy(
     OldCatBuy(
         id = "old_cat_buy",
         title = "老猫买入",
-        description = "回看上一个交易日的老猫涨停候选，判断选股日是否满足买入条件。"
+        description = "回看上一交易日首板早上封板、非 ST、非一字板候选，按老猫买入条件筛选。"
     ),
     FirstLimitUp(
         id = "limit_up_first",
@@ -163,7 +163,7 @@ enum class BacktestStrategy(
     OldCat(
         id = "old_cat",
         title = "老猫战法",
-        description = "只做首板且早上封板，排除一字涨停板；涨停后第三个交易日开盘检查，若相对涨停日收盘价涨幅不超过 5% 则按纪律买入；分时均线止损，涨幅达到 10% 强制平仓。"
+        description = "只做首板且早上封板，排除 ST 和一字板；涨停日后第 2 个交易日开盘若相对涨停日收盘价涨幅不超过 5% 则买入；分时均线止损，止盈率可设置。"
     )
 }
 
