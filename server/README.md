@@ -90,7 +90,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/selections/run \
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/backtests \
   -H "Content-Type: application/json" \
-  -d '{"strategy_id":"old_cat","holding_days":3,"initial_capital":100000,"max_positions_per_day":3,"board":"main","start_date":"2026-02-15","end_date":"2026-05-15"}'
+  -d '{"strategy_id":"old_cat","holding_days":3,"max_positions_per_day":3,"board":"main","start_date":"2026-02-15","end_date":"2026-05-15"}'
 ```
 
 命令说明：
@@ -98,8 +98,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/backtests \
 - `POST /api/v1/backtests`：运行回测，结果直接返回，不保存回测结果。
 - `strategy_id`：回测战法 ID，正式战法是 `old_cat`，策略对比接口会额外返回多个老猫对照策略。
 - `holding_days`：买入后最多持有交易日数量。
-- `initial_capital`：初始资金。
-- `max_positions_per_day`：每日最多买入股票数量，当前 APP 默认 3。
+- 初始资金：默认 100000 元，APP 端不再提供输入。
+- `max_positions_per_day`：每日最多同时买入股票数量，APP 默认 3，可由用户选择。
 - `board`：回测板块，可填 `main`、`chinext`，不填表示全部。
 - `start_date` / `end_date`：回测区间。
 
@@ -267,6 +267,5 @@ APP 触发 `/api/v1/backtests/experiments` 时，服务端会同时跑多组互�
 
 - `old_cat`：正式老猫战法，首板、早上封板、非 ST、非一字板；超过 3 只时按最近 5 个交易日累计涨幅最低优先买入。
 - `old_cat_stop_loss_rank`：选股条件与正式老猫战法一致；超过 3 只时按“买入价到分时均线止损价的亏损比例”从低到高排序，止损只亏 0.5% 的优先级高于止损要亏 3% 的。
-- `old_cat_afternoon_first`：只做首板且涨停形态为下午封板；买卖规则与老猫战法一致。
-- `old_cat_half_take_profit`：选股条件与正式老猫战法一致；达到 APP 设置的止盈率时卖一半，剩余仓位持有到期。
 - `old_cat_min_mv_50b`：选股条件与正式老猫战法一致；市值小于 50 亿的股票不买。
+- `old_cat_position_cap`：选股条件与正式老猫战法一致；单只股票买入金额不超过买入前可用余额的三分之一。

@@ -65,7 +65,7 @@ curl http://14.103.183.47:8000/api/v1/backtest-strategies
 ```bash
 curl -X POST http://14.103.183.47:8000/api/v1/backtests \
   -H 'Content-Type: application/json' \
-  -d '{"strategy_id":"old_cat","holding_days":3,"initial_capital":100000,"max_positions_per_day":3}'
+  -d '{"strategy_id":"old_cat","holding_days":3,"max_positions_per_day":3}'
 ```
 
 命令说明：调用回测接口。回测结果只返回给客户端，不会保存到服务端数据库。
@@ -199,7 +199,7 @@ curl -X POST http://14.103.183.47:8000/api/v1/selections/run \
 ```bash
 curl -X POST http://14.103.183.47:8000/api/v1/backtests \
   -H 'Content-Type: application/json' \
-  -d '{"strategy_id":"old_cat","start_date":"2026-02-15","end_date":"2026-05-15","holding_days":3,"initial_capital":100000,"max_positions_per_day":3,"board":"main"}'
+  -d '{"strategy_id":"old_cat","start_date":"2026-02-15","end_date":"2026-05-15","holding_days":3,"max_positions_per_day":3,"board":"main"}'
 ```
 
 命令说明：
@@ -207,8 +207,8 @@ curl -X POST http://14.103.183.47:8000/api/v1/backtests \
 - `strategy_id`：战法 ID，当前只有 `old_cat`。
 - `start_date` / `end_date`：回测区间。
 - `holding_days`：最多持有交易日数量。
-- `initial_capital`：初始资金。
-- `max_positions_per_day`：每天最多买入数量，当前默认 3。
+- 初始资金：默认 100000 元，APP 不再提供输入。
+- `max_positions_per_day`：每天最多同时买入数量，APP 默认 3，可由用户选择。
 - `board`：可选 `main` 主板、`chinext` 创业板；不传表示全部。
 - 回测结果只返回给 APP，不写入数据库。
 

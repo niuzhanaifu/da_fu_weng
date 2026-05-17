@@ -27,7 +27,6 @@ object MarketApiClient {
         startDate: String?,
         endDate: String?,
         holdingDays: Int,
-        initialCapital: Double,
         takeProfitPercent: Double,
         allowBelowMarketMa25: Boolean,
         board: MarketBoard?,
@@ -36,7 +35,6 @@ object MarketApiClient {
         val payload = JSONObject().apply {
             put("strategy_id", "old_cat")
             put("holding_days", holdingDays)
-            put("initial_capital", initialCapital)
             put("max_positions_per_day", maxPositionsPerDay)
             board?.let { put("board", if (it == MarketBoard.ChiNext) "chinext" else "main") }
             put("take_profit_percent", takeProfitPercent)
@@ -51,7 +49,6 @@ object MarketApiClient {
         startDate: String?,
         endDate: String?,
         holdingDays: Int,
-        initialCapital: Double,
         takeProfitPercent: Double,
         allowBelowMarketMa25: Boolean,
         board: MarketBoard?,
@@ -60,7 +57,6 @@ object MarketApiClient {
         val payload = JSONObject().apply {
             put("strategy_id", "old_cat")
             put("holding_days", holdingDays)
-            put("initial_capital", initialCapital)
             put("max_positions_per_day", maxPositionsPerDay)
             put("take_profit_percent", takeProfitPercent)
             put("allow_below_market_ma25", allowBelowMarketMa25)

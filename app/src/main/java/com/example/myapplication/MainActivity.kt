@@ -540,7 +540,7 @@ private fun ClearDataCard(
 private fun BacktestPage(groups: List<DailyPickGroup>) {
     val context = LocalContext.current
     var holdingDays by remember { mutableIntStateOf(3) }
-    var initialCapitalText by remember { mutableStateOf("100000") }
+    var maxPositionsPerDay by remember { mutableIntStateOf(3) }
     var takeProfitText by remember { mutableStateOf("10") }
     var allowBelowMarketMa25 by remember { mutableStateOf(true) }
     var boardFilter by remember { mutableStateOf(PickBoardFilter.All) }
@@ -566,9 +566,8 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
         isRunning = true
         showDoneDialog = false
         errorMessage = null
-        val initialCapital = initialCapitalText.toDoubleOrNull() ?: 0.0
         val takeProfitPercent = takeProfitText.toDoubleOrNull() ?: 10.0
-        AppLogger.i("Backtest", "started remote strategy=${selectedStrategy.id} range=$normalizedStart..$normalizedEnd holdingDays=$holdingDays capital=$initialCapital")
+        AppLogger.i("Backtest", "started remote strategy=${selectedStrategy.id} range=$normalizedStart..$normalizedEnd holdingDays=$holdingDays maxPositions=$maxPositionsPerDay")
         delay(350)
         try {
             val board = when (boardFilter) {
@@ -580,10 +579,10 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                 startDate = normalizedStart.ifEmpty { null },
                 endDate = normalizedEnd.ifEmpty { null },
                 holdingDays = holdingDays,
-                initialCapital = initialCapital,
                 takeProfitPercent = takeProfitPercent,
                 allowBelowMarketMa25 = allowBelowMarketMa25,
-                board = board
+                board = board,
+                maxPositionsPerDay = maxPositionsPerDay
             )
             result = currentResult
             val entry = BacktestHistoryEntry(
@@ -594,7 +593,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                 startDate = normalizedStart,
                 endDate = normalizedEnd,
                 holdingDays = holdingDays,
-                initialCapital = initialCapital,
+                initialCapital = currentResult.initialCapital,
                 board = board,
                 result = currentResult
             )
@@ -616,7 +615,6 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
         if (experimentRequest == 0) return@LaunchedEffect
         isExperimentRunning = true
         experimentError = null
-        val initialCapital = initialCapitalText.toDoubleOrNull() ?: 0.0
         val takeProfitPercent = takeProfitText.toDoubleOrNull() ?: 10.0
         delay(350)
         try {
@@ -624,14 +622,14 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                 startDate = normalizedStart.ifEmpty { null },
                 endDate = normalizedEnd.ifEmpty { null },
                 holdingDays = holdingDays,
-                initialCapital = initialCapital,
                 takeProfitPercent = takeProfitPercent,
                 allowBelowMarketMa25 = allowBelowMarketMa25,
                 board = when (boardFilter) {
                     PickBoardFilter.All -> null
                     PickBoardFilter.Main -> MarketBoard.Main
                     PickBoardFilter.ChiNext -> MarketBoard.ChiNext
-                }
+                },
+                maxPositionsPerDay = maxPositionsPerDay
             )
             AppLogger.i("Backtest", "experiment finished items=${experimentResult?.items?.size}")
         } catch (error: Exception) {
@@ -695,14 +693,14 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
         item {
             BacktestControls(
                 holdingDays = holdingDays,
-                initialCapitalText = initialCapitalText,
+                maxPositionsPerDay = maxPositionsPerDay,
                 takeProfitText = takeProfitText,
                 allowBelowMarketMa25 = allowBelowMarketMa25,
                 onHoldingDays = {
                     AppLogger.d("Backtest", "holdingDays changed=$it")
                     holdingDays = it
                 },
-                onInitialCapital = { initialCapitalText = it },
+                onMaxPositionsPerDay = { maxPositionsPerDay = it },
                 onTakeProfit = { takeProfitText = it },
                 onAllowBelowMarketMa25 = { allowBelowMarketMa25 = it },
                 isRunning = isRunning,
@@ -731,7 +729,6 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                     startDate = entry.startDate
                     endDate = entry.endDate
                     holdingDays = entry.holdingDays
-                    initialCapitalText = entry.initialCapital.toString()
                     boardFilter = when (entry.board) {
                         MarketBoard.Main -> PickBoardFilter.Main
                         MarketBoard.ChiNext -> PickBoardFilter.ChiNext
@@ -1060,11 +1057,11 @@ private fun StrategyControls(
 @Composable
 private fun BacktestControls(
     holdingDays: Int,
-    initialCapitalText: String,
+    maxPositionsPerDay: Int,
     takeProfitText: String,
     allowBelowMarketMa25: Boolean,
     onHoldingDays: (Int) -> Unit,
-    onInitialCapital: (String) -> Unit,
+    onMaxPositionsPerDay: (Int) -> Unit,
     onTakeProfit: (String) -> Unit,
     onAllowBelowMarketMa25: (Boolean) -> Unit,
     isRunning: Boolean,
@@ -1076,14 +1073,7 @@ private fun BacktestControls(
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("交易参数", color = Ink, fontWeight = FontWeight.Bold)
-            OutlinedTextField(
-                value = initialCapitalText,
-                onValueChange = { raw -> onInitialCapital(raw.filter { it.isDigit() || it == '.' }) },
-                label = { Text("初始资金") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth()
-            )
+            Text("初始资金：100000 元", color = Muted, fontSize = 13.sp)
             OutlinedTextField(
                 value = takeProfitText,
                 onValueChange = { raw -> onTakeProfit(raw.filter { it.isDigit() || it == '.' }.take(5)) },
@@ -1109,10 +1099,16 @@ private fun BacktestControls(
                 valueRange = 1f..10f,
                 steps = 8
             )
+            Text("同时买入数量：$maxPositionsPerDay 只", color = Muted, fontSize = 13.sp)
+            Slider(
+                value = maxPositionsPerDay.toFloat(),
+                onValueChange = { onMaxPositionsPerDay(it.roundToInt().coerceIn(1, 10)) },
+                valueRange = 1f..10f,
+                steps = 8
+            )
             Button(
                 onClick = onRun,
                 enabled = !isRunning &&
-                    (initialCapitalText.toDoubleOrNull() ?: 0.0) > 0.0 &&
                     (takeProfitText.toDoubleOrNull() ?: 0.0) > 0.0,
                 modifier = Modifier.fillMaxWidth()
             ) {

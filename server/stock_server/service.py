@@ -37,6 +37,7 @@ class BacktestProfile:
     exclude_st: bool = True
     limit_shapes: set[str] | None = None
     min_total_mv_wan: float | None = None
+    max_position_allocation_fraction: float | None = None
     engine_strategy_id: str = "old_cat"
     rank_mode: str = RANK_MODE_RECENT_5DAY_CHANGE
 
@@ -66,23 +67,6 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         limit_shapes={"morning"},
         rank_mode=RANK_MODE_STOP_LOSS_LOSS,
     ),
-    "old_cat_afternoon_first": BacktestProfile(
-        id="old_cat_afternoon_first",
-        name="老猫对照：下午封板",
-        description="只做首板且涨停形态为下午封板；其余买卖规则与老猫战法一致。",
-        first_limit_only=True,
-        exclude_st=True,
-        limit_shapes={"afternoon"},
-    ),
-    "old_cat_half_take_profit": BacktestProfile(
-        id="old_cat_half_take_profit",
-        name="老猫对照：止盈卖半",
-        description="选股条件与老猫战法一致；收益率达到预设止盈率时卖一半，剩余仓位持有到期。",
-        first_limit_only=True,
-        exclude_st=True,
-        limit_shapes={"morning"},
-        engine_strategy_id="old_cat_half_take_profit",
-    ),
     "old_cat_min_mv_50b": BacktestProfile(
         id="old_cat_min_mv_50b",
         name="老猫对照：市值不低于50亿",
@@ -91,6 +75,15 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         exclude_st=True,
         limit_shapes={"morning"},
         min_total_mv_wan=500000.0,
+    ),
+    "old_cat_position_cap": BacktestProfile(
+        id="old_cat_position_cap",
+        name="老猫对照：买入限额",
+        description="选股条件与老猫战法一致；单只股票买入金额不超过买入前可用余额的三分之一。",
+        first_limit_only=True,
+        exclude_st=True,
+        limit_shapes={"morning"},
+        max_position_allocation_fraction=1.0 / 3.0,
     ),
 }
 
@@ -235,6 +228,7 @@ def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> Ba
         initial_capital=request.initial_capital,
         max_positions_per_day=request.max_positions_per_day,
         rank_mode=profile.rank_mode,
+        max_position_allocation_fraction=profile.max_position_allocation_fraction,
     )
 
 
@@ -260,6 +254,7 @@ def run_backtest_experiment(conn: sqlite3.Connection, request: BacktestRequest) 
             initial_capital=request.initial_capital,
             max_positions_per_day=request.max_positions_per_day,
             rank_mode=profile.rank_mode,
+            max_position_allocation_fraction=profile.max_position_allocation_fraction,
         )
         items.append(
             BacktestExperimentItemOut(
