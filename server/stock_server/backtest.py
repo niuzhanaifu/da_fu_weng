@@ -146,7 +146,8 @@ def run_backtest(
             for planned in rank_planned_trades(planned_trades_by_date.get(trade_date, []))[:max_positions_per_day]
         ]
         if candidates:
-            allocation = position_allocation(cash, len(candidates), max_position_allocation_fraction)
+            total_assets = cash + sum(position.trade.buy_price * position.shares for position in open_positions)
+            allocation = position_allocation(cash, total_assets, len(candidates), max_position_allocation_fraction)
             for trade in candidates:
                 shares = affordable_lot_shares(allocation, trade.buy_price)
                 if shares <= 0 or cash < shares * trade.buy_price:
@@ -249,12 +250,17 @@ def close_due_positions(
     return cash, sold
 
 
-def position_allocation(cash: float, candidate_count: int, max_fraction: float | None) -> float:
+def position_allocation(
+    cash: float,
+    total_assets: float,
+    candidate_count: int,
+    max_fraction: float | None,
+) -> float:
     if candidate_count <= 0:
         return 0.0
     allocation = cash / candidate_count
     if max_fraction is not None:
-        allocation = min(allocation, cash * max_fraction)
+        allocation = min(allocation, total_assets * max_fraction)
     return allocation
 
 

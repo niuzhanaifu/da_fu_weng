@@ -79,7 +79,7 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
     "old_cat_position_cap": BacktestProfile(
         id="old_cat_position_cap",
         name="老猫对照：买入限额",
-        description="选股条件与老猫战法一致；单只股票买入金额不超过买入前可用余额的三分之一。",
+        description="选股条件与老猫战法一致；单只股票买入金额不超过买入前总资产的三分之一。",
         first_limit_only=True,
         exclude_st=True,
         limit_shapes={"morning"},
