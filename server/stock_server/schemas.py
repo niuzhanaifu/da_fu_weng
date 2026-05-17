@@ -133,6 +133,9 @@ class BacktestTradeOut(BaseModel):
     shares: int = 0
     position_amount: float = 0.0
     profit_amount: float = 0.0
+    partial_sell_date: Optional[str] = None
+    partial_sell_price: Optional[float] = None
+    partial_sell_ratio: float = 0.0
     stop_loss_price: float
     return_percent: float
     exit_reason: str

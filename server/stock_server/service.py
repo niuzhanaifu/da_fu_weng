@@ -56,21 +56,6 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         exclude_st=True,
         limit_shapes={"morning"},
     ),
-    "old_cat_all_limit": BacktestProfile(
-        id="old_cat_all_limit",
-        name="老猫对照：全部涨停",
-        description="不限制首板，只排除一字板；其余买卖规则与老猫战法一致。",
-        first_limit_only=False,
-        exclude_st=True,
-    ),
-    "old_cat_clean_first": BacktestProfile(
-        id="old_cat_clean_first",
-        name="老猫对照：首板非炸板",
-        description="只做首板，排除炸板回封；其余买卖规则与老猫战法一致。",
-        first_limit_only=True,
-        exclude_st=True,
-        limit_shapes={"morning", "afternoon"},
-    ),
     "old_cat_stop_loss_rank": BacktestProfile(
         id="old_cat_stop_loss_rank",
         name="老猫对照：止损率排序",
@@ -79,6 +64,31 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         exclude_st=True,
         limit_shapes={"morning"},
         rank_mode=RANK_MODE_STOP_LOSS_LOSS,
+    ),
+    "old_cat_afternoon_first": BacktestProfile(
+        id="old_cat_afternoon_first",
+        name="老猫对照：下午封板",
+        description="只做首板且涨停形态为下午封板；其余买卖规则与老猫战法一致。",
+        first_limit_only=True,
+        exclude_st=True,
+        limit_shapes={"afternoon"},
+    ),
+    "old_cat_resealed_first": BacktestProfile(
+        id="old_cat_resealed_first",
+        name="老猫对照：回封板",
+        description="只做首板且涨停形态为炸板回封；其余买卖规则与老猫战法一致。",
+        first_limit_only=True,
+        exclude_st=True,
+        limit_shapes={"resealed"},
+    ),
+    "old_cat_half_take_profit": BacktestProfile(
+        id="old_cat_half_take_profit",
+        name="老猫对照：止盈卖半",
+        description="选股条件与老猫战法一致；收益率达到预设止盈率时卖一半，剩余仓位持有到期。",
+        first_limit_only=True,
+        exclude_st=True,
+        limit_shapes={"morning"},
+        engine_strategy_id="old_cat_half_take_profit",
     ),
 }
 

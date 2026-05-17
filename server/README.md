@@ -266,6 +266,7 @@ APP 触发 `/api/v1/selections/run` 时通过 `strategy_id` 选择服务端战�
 APP 触发 `/api/v1/backtests/experiments` 时，服务端会同时跑多组互不重复的老猫对照策略：
 
 - `old_cat`：正式老猫战法，首板、早上封板、非 ST、非一字板；超过 3 只时按最近 5 个交易日累计涨幅最低优先买入。
-- `old_cat_all_limit`：不限制首板，只排除一字板和 ST；买卖规则与老猫战法一致。
-- `old_cat_clean_first`：只做首板，排除炸板回封，只保留早上封板和下午封板；买卖规则与老猫战法一致。
 - `old_cat_stop_loss_rank`：选股条件与正式老猫战法一致；超过 3 只时按“买入价到分时均线止损价的亏损比例”从低到高排序，止损只亏 0.5% 的优先级高于止损要亏 3% 的。
+- `old_cat_afternoon_first`：只做首板且涨停形态为下午封板；买卖规则与老猫战法一致。
+- `old_cat_resealed_first`：只做首板且涨停形态为炸板回封；买卖规则与老猫战法一致。
+- `old_cat_half_take_profit`：选股条件与正式老猫战法一致；达到 APP 设置的止盈率时卖一半，剩余仓位持有到期。

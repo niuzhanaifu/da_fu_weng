@@ -71,8 +71,77 @@ class OldCatStrategy:
         )
 
 
+@dataclass(frozen=True)
+class OldCatHalfTakeProfitStrategy:
+    id: str = "old_cat_half_take_profit"
+
+    def simulate_trade(self, pick: StockPickOut, holding_days: int, take_profit_percent: float) -> BacktestTradeOut | None:
+        if len(pick.future_opens) < 3 or len(pick.future_closes) < 3 or len(pick.future_dates) < 3:
+            return None
+
+        buy_price = pick.future_opens[1]
+        if buy_price is None or buy_price <= 0:
+            return None
+        if buy_price > pick.close * 1.05:
+            return None
+
+        sell_window_end = 2 + max(1, holding_days)
+        future_closes = pick.future_closes[2:sell_window_end]
+        future_highs = pick.future_highs[2 : 2 + len(future_closes)]
+        future_dates = pick.future_dates[2 : 2 + len(future_closes)]
+        if not future_closes:
+            return None
+
+        sell_price = future_closes[-1]
+        sell_index = len(future_closes) - 1
+        exit_reason = "老猫战法对比：持有到期"
+        partial_sell_date: str | None = None
+        partial_sell_price: float | None = None
+        partial_sell_ratio = 0.0
+        return_percent = (sell_price - buy_price) / buy_price * 100.0
+        take_profit_price = buy_price * (1.0 + take_profit_percent / 100.0)
+
+        for index, close in enumerate(future_closes):
+            if close <= pick.stop_loss_price:
+                sell_price = close
+                sell_index = index
+                return_percent = (sell_price - buy_price) / buy_price * 100.0
+                exit_reason = "老猫战法对比：分时均价止损"
+                break
+            high = future_highs[index] if index < len(future_highs) else close
+            if high >= take_profit_price:
+                partial_sell_date = future_dates[index] if index < len(future_dates) else None
+                partial_sell_price = take_profit_price
+                partial_sell_ratio = 0.5
+                sell_price = future_closes[-1]
+                return_percent = (
+                    (take_profit_price - buy_price) * partial_sell_ratio
+                    + (sell_price - buy_price) * (1.0 - partial_sell_ratio)
+                ) / buy_price * 100.0
+                sell_index = len(future_closes) - 1
+                exit_reason = f"老猫战法对比：涨幅达到{take_profit_percent:.0f}%卖一半，剩余持有到期"
+                break
+
+        return BacktestTradeOut(
+            code=pick.code,
+            name=pick.name,
+            board=pick.board,
+            buy_date=pick.future_dates[1],
+            sell_date=future_dates[sell_index] if sell_index < len(future_dates) else f"T+{sell_index + 1}",
+            buy_price=buy_price,
+            sell_price=sell_price,
+            partial_sell_date=partial_sell_date,
+            partial_sell_price=partial_sell_price,
+            partial_sell_ratio=partial_sell_ratio,
+            stop_loss_price=pick.stop_loss_price,
+            return_percent=return_percent,
+            exit_reason=exit_reason,
+        )
+
+
 STRATEGIES: dict[str, BacktestStrategy] = {
     "old_cat": OldCatStrategy(),
+    "old_cat_half_take_profit": OldCatHalfTakeProfitStrategy(),
 }
 
 
@@ -80,14 +149,21 @@ STRATEGIES: dict[str, BacktestStrategy] = {
 class OpenPosition:
     trade: BacktestTradeOut
     shares: int
+    remaining_shares: int = 0
+    realized_profit: float = 0.0
+    partial_sold: bool = False
+
+    def __post_init__(self) -> None:
+        if self.remaining_shares <= 0:
+            self.remaining_shares = self.shares
 
     @property
     def sell_value(self) -> float:
-        return self.trade.sell_price * self.shares
+        return self.trade.sell_price * self.remaining_shares
 
     @property
     def profit_amount(self) -> float:
-        return (self.trade.sell_price - self.trade.buy_price) * self.shares
+        return self.realized_profit + (self.trade.sell_price - self.trade.buy_price) * self.remaining_shares
 
 
 @dataclass(frozen=True)
@@ -158,7 +234,7 @@ def run_backtest(
         cash, sold = close_due_positions(cash, open_positions, trade_date)
         closed_trades.extend(sold)
 
-        equity = cash + sum(position.trade.buy_price * position.shares for position in open_positions)
+        equity = cash + sum(position.trade.buy_price * position.remaining_shares for position in open_positions)
         equity_curve.append(EquityPointOut(trade_date=trade_date, capital=equity))
         peak = max(peak, equity)
         if peak > 0:
@@ -238,6 +314,14 @@ def close_due_positions(
     remaining: list[OpenPosition] = []
     sold: list[BacktestTradeOut] = []
     for position in open_positions:
+        if should_partial_sell(position, trade_date):
+            partial_shares = max(1, int(position.shares * position.trade.partial_sell_ratio))
+            partial_shares = min(partial_shares, position.remaining_shares)
+            partial_price = position.trade.partial_sell_price or position.trade.sell_price
+            cash += partial_shares * partial_price
+            position.realized_profit += (partial_price - position.trade.buy_price) * partial_shares
+            position.remaining_shares -= partial_shares
+            position.partial_sold = True
         if position.trade.sell_date <= trade_date:
             position.trade.profit_amount = position.profit_amount
             cash += position.sell_value
@@ -246,6 +330,16 @@ def close_due_positions(
             remaining.append(position)
     open_positions[:] = remaining
     return cash, sold
+
+
+def should_partial_sell(position: OpenPosition, trade_date: str) -> bool:
+    if position.partial_sold:
+        return False
+    if position.trade.partial_sell_ratio <= 0.0:
+        return False
+    if not position.trade.partial_sell_date:
+        return False
+    return position.trade.partial_sell_date <= trade_date and position.remaining_shares > 0
 
 
 def affordable_lot_shares(allocation: float, buy_price: float) -> int:
