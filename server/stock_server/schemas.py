@@ -50,6 +50,12 @@ class IndicatorOption(BaseModel):
     description: str
 
 
+class SelectionStrategyOption(BaseModel):
+    id: str
+    name: str
+    description: str
+
+
 class StockPickOut(BaseModel):
     trade_date: str
     code: str
@@ -100,6 +106,7 @@ class DailyGroupOut(BaseModel):
 
 class SelectionRequest(BaseModel):
     trade_date: Optional[str] = None
+    strategy_id: str = "old_cat_buy"
     indicator_ids: List[str] = Field(default_factory=lambda: ["volume", "seal", "close"])
 
 

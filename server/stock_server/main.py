@@ -19,12 +19,14 @@ from .schemas import (
     DailyGroupOut,
     DailyQuoteIn,
     IndicatorOption,
+    SelectionStrategyOption,
     SelectionRequest,
     SelectionRunOut,
 )
 from .service import (
     BACKTEST_PROFILES,
     DEFAULT_INDICATORS,
+    SELECTION_PROFILES,
     get_group,
     run_backtest_experiment,
     run_daily_selection,
@@ -52,6 +54,17 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/indicators", response_model=list[IndicatorOption])
     def indicators() -> list[IndicatorOption]:
         return INDICATORS
+
+    @app.get("/api/v1/selection-strategies", response_model=list[SelectionStrategyOption])
+    def selection_strategies() -> list[SelectionStrategyOption]:
+        return [
+            SelectionStrategyOption(
+                id=profile.id,
+                name=profile.name,
+                description=profile.description,
+            )
+            for profile in SELECTION_PROFILES.values()
+        ]
 
     @app.get("/api/v1/backtest-strategies")
     def backtest_strategies() -> list[dict[str, str]]:
@@ -148,12 +161,13 @@ def create_app() -> FastAPI:
     @app.post("/api/v1/selections/run", response_model=DailyGroupOut)
     def run_public_selection(request: SelectionRequest, conn=Depends(get_db)) -> DailyGroupOut:
         try:
-            group = run_selection_group(conn, request.trade_date, request.indicator_ids)
+            group = run_selection_group(conn, request.trade_date, request.indicator_ids, request.strategy_id)
         except (ValueError, TushareError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         logger.info(
-            "public selection trade_date=%s indicators=%s picks=%s",
+            "public selection trade_date=%s strategy=%s indicators=%s picks=%s",
             group.trade_date,
+            request.strategy_id,
             group.indicator_ids,
             len(group.picks),
         )

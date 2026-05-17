@@ -82,6 +82,23 @@ data class DailyPickGroup(
     val averageStopLoss: Double = picks.map { it.stopLossPrice }.averageOrZero()
 }
 
+enum class SelectionStrategy(
+    val id: String,
+    val title: String,
+    val description: String
+) {
+    OldCatBuy(
+        id = "old_cat_buy",
+        title = "老猫买入",
+        description = "回看上一个交易日的老猫涨停候选，判断选股日是否满足买入条件。"
+    ),
+    FirstLimitUp(
+        id = "limit_up_first",
+        title = "首板涨停",
+        description = "选择当日涨停的非连板股票，标注涨停类型与分时均线止损。"
+    )
+}
+
 data class BacktestTrade(
     val code: String,
     val name: String,

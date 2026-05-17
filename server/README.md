@@ -75,12 +75,13 @@ curl "http://127.0.0.1:8000/api/v1/stocks/600536/candles?limit=120"
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/selections/run \
   -H "Content-Type: application/json" \
-  -d '{"trade_date":"2026-05-15","indicator_ids":["volume","seal","close"]}'
+  -d '{"trade_date":"2026-05-15","strategy_id":"old_cat_buy","indicator_ids":["volume","seal","close"]}'
 ```
 
 命令说明：
 
-- `POST /api/v1/selections/run`：按指定日期和指标实时选股，结果直接返回给 APP，不保存到服务端数据库。
+- `POST /api/v1/selections/run`：按指定日期、选股战法和指标实时选股，结果直接返回给 APP，不保存到服务端数据库。
+- `strategy_id`：选股战法 ID，可填 `old_cat_buy` 或 `limit_up_first`。
 - 如果 `2026-05-15` 本地行情完整，服务端只读本地 SQLite，不请求 Tushare。
 - 如果 `2026-05-15` 本地行情不存在或少于 1000 条，服务端会调用 Tushare 日线接口补齐当天数据。
 
@@ -95,7 +96,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/backtests \
 命令说明：
 
 - `POST /api/v1/backtests`：运行回测，结果直接返回，不保存回测结果。
-- `strategy_id`：战法 ID，当前只有 `old_cat`。
+- `strategy_id`：回测战法 ID，正式战法是 `old_cat`，策略对比接口会额外返回多个老猫对照策略。
 - `holding_days`：买入后最多持有交易日数量。
 - `initial_capital`：初始资金。
 - `max_positions_per_day`：每日最多买入股票数量，当前 APP 默认 3。
@@ -217,6 +218,7 @@ tail -f /opt/dafuweng/server/logs/server.log
 
 - `GET /health`
 - `GET /api/v1/indicators`
+- `GET /api/v1/selection-strategies`
 - `GET /api/v1/backtest-strategies`
 - `GET /api/v1/groups/latest`
 - `GET /api/v1/groups/{trade_date}`
@@ -247,6 +249,15 @@ tail -f /opt/dafuweng/server/logs/server.log
 - 回测结果只返回给 APP，不保存到服务端
 
 按当前老猫战法执行某日选股时，服务端会回看前一天涨停股。例如执行 `2026-05-14` 的选股，会筛选 `2026-05-13` 的首板早盘涨停，并结合 `2026-05-14` 后续行情判断是否满足老猫战法的买入候选条件。选股和回测使用同一套服务端 profile。
+
+选股日期和候选日期都按本地行情表里的交易日处理。比如选股日是周一 `2026-05-11`，老猫买入会自动回看上一个开盘日 `2026-05-08`，不会请求周日 `2026-05-10` 的 Tushare 数据。
+
+## 选股战法
+
+APP 触发 `/api/v1/selections/run` 时通过 `strategy_id` 选择服务端战法：
+
+- `old_cat_buy`：老猫买入。回看上一个交易日的老猫涨停候选，再用选股日后续行情判断是否满足买入条件。
+- `limit_up_first`：首板涨停。选择选股当日涨停的非连板股票，排除一字板和 ST，并标注涨停类型与分时均线止损。
 
 ## 策略对比
 

@@ -8,6 +8,7 @@ import com.example.myapplication.market.DailyPickGroup
 import com.example.myapplication.market.EquityPoint
 import com.example.myapplication.market.MarketBoard
 import com.example.myapplication.market.MinuteTrade
+import com.example.myapplication.market.SelectionStrategy
 import com.example.myapplication.market.StockPick
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -72,10 +73,12 @@ object MarketApiClient {
 
     suspend fun runSelection(
         tradeDate: String?,
+        strategy: SelectionStrategy,
         indicatorIds: Set<String>
     ): DailyPickGroup = withContext(Dispatchers.IO) {
         val payload = JSONObject().apply {
             if (!tradeDate.isNullOrBlank()) put("trade_date", tradeDate)
+            put("strategy_id", strategy.id)
             put("indicator_ids", JSONArray(indicatorIds.sorted()))
         }
         postJson("/api/v1/selections/run", payload).toDailyPickGroup()

@@ -40,6 +40,13 @@ class BacktestProfile:
     rank_mode: str = RANK_MODE_RECENT_5DAY_CHANGE
 
 
+@dataclass(frozen=True)
+class SelectionProfile:
+    id: str
+    name: str
+    description: str
+
+
 BACKTEST_PROFILES: dict[str, BacktestProfile] = {
     "old_cat": BacktestProfile(
         id="old_cat",
@@ -72,6 +79,19 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         exclude_st=True,
         limit_shapes={"morning"},
         rank_mode=RANK_MODE_STOP_LOSS_LOSS,
+    ),
+}
+
+SELECTION_PROFILES: dict[str, SelectionProfile] = {
+    "old_cat_buy": SelectionProfile(
+        id="old_cat_buy",
+        name="老猫买入",
+        description="回看上一个交易日的老猫涨停候选，结合选股日行情判断是否满足买入条件。",
+    ),
+    "limit_up_first": SelectionProfile(
+        id="limit_up_first",
+        name="首板涨停",
+        description="选择选股当日涨停的非连板股票，排除一字板和 ST，并标注涨停类型与分时均线止损。",
     ),
 }
 
@@ -120,22 +140,19 @@ def run_selection_group(
     conn: sqlite3.Connection,
     trade_date: str | None,
     indicator_ids: Sequence[str] | None = None,
+    strategy_id: str = "old_cat_buy",
 ) -> DailyGroupOut:
-    selected_date = trade_date or repository.latest_quote_date(conn)
+    selected_date = resolve_trade_date(conn, trade_date)
     if not selected_date:
         raise ValueError("No daily quotes available.")
+    if strategy_id not in SELECTION_PROFILES:
+        raise ValueError(f"Unsupported selection strategy: {strategy_id}")
 
     indicators = list(indicator_ids or DEFAULT_INDICATORS)
-    ensure_quotes_for_date(conn, selected_date)
-    candidate_date = date_days_before(selected_date, 1)
-    ensure_quotes_for_date(conn, candidate_date)
-    snapshots = select_limit_up(repository.load_quotes(conn, candidate_date), indicators)
-    snapshots = apply_backtest_profile(conn, snapshots, BACKTEST_PROFILES["old_cat"])
-    picks = [
-        pick
-        for pick in (snapshot_to_pick(conn, snapshot, holding_days=3) for snapshot in snapshots)
-        if is_old_cat_buy_candidate(pick, selected_date)
-    ]
+    if strategy_id == "old_cat_buy":
+        picks = run_old_cat_selection(conn, selected_date, indicators)
+    else:
+        picks = run_first_limit_selection(conn, selected_date, indicators)
     return DailyGroupOut(
         trade_date=selected_date,
         generated_at=current_timestamp(),
@@ -144,6 +161,43 @@ def run_selection_group(
         chinext_count=sum(1 for pick in picks if pick.board.value == "chinext"),
         picks=picks,
     )
+
+
+def run_old_cat_selection(
+    conn: sqlite3.Connection,
+    selected_date: str,
+    indicators: Sequence[str],
+) -> list[StockPickOut]:
+    candidate_date = repository.previous_quote_date(conn, selected_date)
+    if not candidate_date:
+        raise ValueError(f"No previous trading day quotes found before {selected_date}.")
+    snapshots = select_limit_up(repository.load_quotes(conn, candidate_date), indicators)
+    snapshots = apply_backtest_profile(conn, snapshots, BACKTEST_PROFILES["old_cat"])
+    return [
+        pick
+        for pick in (snapshot_to_pick(conn, snapshot, holding_days=3) for snapshot in snapshots)
+        if is_old_cat_buy_candidate(pick, selected_date)
+    ]
+
+
+def run_first_limit_selection(
+    conn: sqlite3.Connection,
+    selected_date: str,
+    indicators: Sequence[str],
+) -> list[StockPickOut]:
+    snapshots = select_limit_up(repository.load_quotes(conn, selected_date), indicators)
+    snapshots = apply_backtest_profile(
+        conn,
+        snapshots,
+        BacktestProfile(
+            id="limit_up_first",
+            name="首板涨停",
+            description="当日首板涨停。",
+            first_limit_only=True,
+            exclude_st=True,
+        ),
+    )
+    return [snapshot_to_pick(conn, snapshot, holding_days=3) for snapshot in snapshots]
 
 
 def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> BacktestResultOut:
@@ -228,6 +282,20 @@ def ensure_quotes_for_date(conn: sqlite3.Connection, trade_date: str) -> None:
     if repository.count_quotes(conn, trade_date) >= FULL_DAILY_QUOTE_MIN_COUNT:
         return
     sync_tushare_quotes(conn, trade_date, trade_date)
+
+
+def resolve_trade_date(conn: sqlite3.Connection, trade_date: str | None) -> str | None:
+    if not trade_date:
+        return repository.latest_quote_date(conn)
+    if repository.count_quotes(conn, trade_date) >= FULL_DAILY_QUOTE_MIN_COUNT:
+        return trade_date
+    try:
+        ensure_quotes_for_date(conn, trade_date)
+    except ValueError:
+        pass
+    if repository.count_quotes(conn, trade_date) >= FULL_DAILY_QUOTE_MIN_COUNT:
+        return trade_date
+    return repository.latest_quote_date_on_or_before(conn, trade_date)
 
 
 def ensure_quotes_for_backtest(

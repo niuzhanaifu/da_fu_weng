@@ -5,6 +5,7 @@ import com.example.myapplication.market.DailyCandle
 import com.example.myapplication.market.DailyPickGroup
 import com.example.myapplication.market.MarketBoard
 import com.example.myapplication.market.MinuteTrade
+import com.example.myapplication.market.SelectionStrategy
 import com.example.myapplication.market.StockPick
 import org.json.JSONArray
 import org.json.JSONObject
@@ -13,15 +14,15 @@ import java.io.File
 object SelectionCache {
     private const val DIR_NAME = "selection-cache"
 
-    fun load(context: Context, indicatorIds: Set<String>): DailyPickGroup? {
-        val file = cacheFile(context, indicatorIds)
+    fun load(context: Context, strategy: SelectionStrategy, indicatorIds: Set<String>): DailyPickGroup? {
+        val file = cacheFile(context, strategy, indicatorIds)
         if (!file.exists()) return null
         return runCatching { JSONObject(file.readText(Charsets.UTF_8)).toDailyPickGroup() }.getOrNull()
     }
 
-    fun save(context: Context, indicatorIds: Set<String>, group: DailyPickGroup) {
+    fun save(context: Context, strategy: SelectionStrategy, indicatorIds: Set<String>, group: DailyPickGroup) {
         val dir = File(context.filesDir, DIR_NAME).apply { mkdirs() }
-        val file = File(dir, fileName(indicatorIds))
+        val file = File(dir, fileName(strategy, indicatorIds))
         file.writeText(group.toJson().toString(), Charsets.UTF_8)
     }
 
@@ -29,13 +30,13 @@ object SelectionCache {
         File(context.filesDir, DIR_NAME).deleteRecursively()
     }
 
-    private fun cacheFile(context: Context, indicatorIds: Set<String>): File {
-        return File(File(context.filesDir, DIR_NAME), fileName(indicatorIds))
+    private fun cacheFile(context: Context, strategy: SelectionStrategy, indicatorIds: Set<String>): File {
+        return File(File(context.filesDir, DIR_NAME), fileName(strategy, indicatorIds))
     }
 
-    private fun fileName(indicatorIds: Set<String>): String {
+    private fun fileName(strategy: SelectionStrategy, indicatorIds: Set<String>): String {
         val key = indicatorIds.sorted().joinToString(separator = "_").ifBlank { "none" }
-        return "selection-$key.json"
+        return "selection-${strategy.id}-$key.json"
     }
 
     private fun DailyPickGroup.toJson(): JSONObject {

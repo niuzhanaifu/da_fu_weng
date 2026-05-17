@@ -127,6 +127,30 @@ def latest_quote_date(conn: sqlite3.Connection) -> str | None:
     return row["trade_date"] if row else None
 
 
+def latest_quote_date_on_or_before(conn: sqlite3.Connection, trade_date: str) -> str | None:
+    row = conn.execute(
+        """
+        SELECT MAX(trade_date) AS trade_date
+        FROM daily_quotes
+        WHERE trade_date <= ?
+        """,
+        (trade_date,),
+    ).fetchone()
+    return row["trade_date"] if row else None
+
+
+def previous_quote_date(conn: sqlite3.Connection, trade_date: str) -> str | None:
+    row = conn.execute(
+        """
+        SELECT MAX(trade_date) AS trade_date
+        FROM daily_quotes
+        WHERE trade_date < ?
+        """,
+        (trade_date,),
+    ).fetchone()
+    return row["trade_date"] if row else None
+
+
 def quote_dates_between(
     conn: sqlite3.Connection,
     start_date: str | None,

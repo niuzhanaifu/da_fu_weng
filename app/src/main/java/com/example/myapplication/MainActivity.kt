@@ -79,6 +79,7 @@ import com.example.myapplication.market.EquityPoint
 import com.example.myapplication.market.IndicatorCatalog
 import com.example.myapplication.market.MarketBoard
 import com.example.myapplication.market.SampleMarketData
+import com.example.myapplication.market.SelectionStrategy
 import com.example.myapplication.market.StockPick
 import com.example.myapplication.market.StockSelectionEngine
 import com.example.myapplication.market.asPercent
@@ -134,7 +135,8 @@ fun StockApp() {
     var selectedTab by remember { mutableIntStateOf(0) }
     var selectedStock by remember { mutableStateOf<StockPick?>(null) }
     var enabledIndicators by remember { mutableStateOf(setOf("volume", "seal", "close")) }
-    val cachedGroup = remember { SelectionCache.load(context, enabledIndicators) }
+    var selectedSelectionStrategy by remember { mutableStateOf(SelectionStrategy.OldCatBuy) }
+    val cachedGroup = remember { SelectionCache.load(context, selectedSelectionStrategy, enabledIndicators) }
     var selectedPickDate by remember { mutableStateOf(cachedGroup?.date ?: todayDateString()) }
     val localGroups = remember {
         StockSelectionEngine.selectDailyGroups(
@@ -190,8 +192,15 @@ fun StockApp() {
                     selectedDate = selectedPickDate,
                     onSelectedDateChange = { selectedPickDate = it },
                     enabledIndicators = enabledIndicators,
+                    selectedStrategy = selectedSelectionStrategy,
+                    onSelectedStrategyChange = {
+                        selectedSelectionStrategy = it
+                        val nextCachedGroup = SelectionCache.load(context, it, enabledIndicators)
+                        selectedPickDate = nextCachedGroup?.date ?: selectedPickDate
+                        groups = nextCachedGroup?.let { cached -> listOf(cached) } ?: emptyList()
+                    },
                     onSelectionResult = { group ->
-                        SelectionCache.save(context, enabledIndicators, group)
+                        SelectionCache.save(context, selectedSelectionStrategy, enabledIndicators, group)
                         selectedPickDate = group.date
                         groups = listOf(group)
                     },
@@ -202,7 +211,7 @@ fun StockApp() {
                     enabledIndicators = enabledIndicators,
                     onChange = {
                         enabledIndicators = it
-                        val nextCachedGroup = SelectionCache.load(context, it)
+                        val nextCachedGroup = SelectionCache.load(context, selectedSelectionStrategy, it)
                         selectedPickDate = nextCachedGroup?.date ?: todayDateString()
                         groups = nextCachedGroup?.let { cachedGroup -> listOf(cachedGroup) } ?: emptyList()
                     },
@@ -219,6 +228,8 @@ private fun PickGroupsPage(
     selectedDate: String,
     onSelectedDateChange: (String) -> Unit,
     enabledIndicators: Set<String>,
+    selectedStrategy: SelectionStrategy,
+    onSelectedStrategyChange: (SelectionStrategy) -> Unit,
     onSelectionResult: (DailyPickGroup) -> Unit,
     onStockClick: (StockPick) -> Unit
 ) {
@@ -242,11 +253,12 @@ private fun PickGroupsPage(
         try {
             val result = MarketApiClient.runSelection(
                 tradeDate = selectedDate,
+                strategy = selectedStrategy,
                 indicatorIds = enabledIndicators
             )
             onSelectedDateChange(result.date)
             onSelectionResult(result)
-            AppLogger.i("Selection", "server selection completed date=${result.date} picks=${result.picks.size} indicators=${enabledIndicators.sorted()}")
+            AppLogger.i("Selection", "server selection completed date=${result.date} strategy=${selectedStrategy.id} picks=${result.picks.size} indicators=${enabledIndicators.sorted()}")
         } catch (error: Exception) {
             selectionError = error.message ?: "服务端选股失败"
             AppLogger.e("Selection", "server selection failed", error)
@@ -280,6 +292,8 @@ private fun PickGroupsPage(
             SelectionActionCard(
                 indicators = enabledIndicators,
                 selectedDate = selectedDate,
+                selectedStrategy = selectedStrategy,
+                onSelectedStrategyChange = onSelectedStrategyChange,
                 isSelecting = isSelecting,
                 onRun = { selectionRequest += 1 }
             )
@@ -408,6 +422,8 @@ private fun StockDetailPage(
 private fun SelectionActionCard(
     indicators: Set<String>,
     selectedDate: String,
+    selectedStrategy: SelectionStrategy,
+    onSelectedStrategyChange: (SelectionStrategy) -> Unit,
     isSelecting: Boolean,
     onRun: () -> Unit
 ) {
@@ -415,22 +431,43 @@ private fun SelectionActionCard(
         colors = CardDefaults.cardColors(containerColor = Panel),
         shape = RoundedCornerShape(8.dp)
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("服务端选股", color = Ink, fontWeight = FontWeight.Bold)
-                Text("日期 $selectedDate / 指标 ${indicators.sorted().joinToString()}", color = Muted, fontSize = 12.sp)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("服务端选股", color = Ink, fontWeight = FontWeight.Bold)
+                    Text("日期 $selectedDate / 指标 ${indicators.sorted().joinToString()}", color = Muted, fontSize = 12.sp)
+                }
+                if (isSelecting) {
+                    CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 3.dp)
+                } else {
+                    TextButton(onClick = onRun) {
+                        Text("开始选股")
+                    }
+                }
             }
-            if (isSelecting) {
-                CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 3.dp)
-            } else {
-                TextButton(onClick = onRun) {
-                    Text("开始选股")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SelectionStrategy.values().forEach { strategy ->
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable(enabled = !isSelecting) { onSelectedStrategyChange(strategy) },
+                        color = if (selectedStrategy == strategy) Color(0xFFEFF6FF) else Color(0xFFF8FAFC),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                strategy.title,
+                                color = if (selectedStrategy == strategy) ChiNextBlue else Ink,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(strategy.description, color = Muted, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
                 }
             }
         }
