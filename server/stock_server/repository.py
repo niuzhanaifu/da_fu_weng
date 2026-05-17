@@ -14,9 +14,9 @@ def upsert_daily_quotes(conn: sqlite3.Connection, quotes: Iterable[DailyQuoteIn]
             """
             INSERT INTO daily_quotes (
                 trade_date, code, name, board, concept, previous_close, open, high, low, close,
-                volume_ratio, turnover_rate, sealed_amount_wan, next_open, future_closes_json, updated_at
+                volume_ratio, turnover_rate, total_mv_wan, sealed_amount_wan, next_open, future_closes_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(trade_date, code) DO UPDATE SET
                 name=excluded.name,
                 board=excluded.board,
@@ -28,6 +28,7 @@ def upsert_daily_quotes(conn: sqlite3.Connection, quotes: Iterable[DailyQuoteIn]
                 close=excluded.close,
                 volume_ratio=excluded.volume_ratio,
                 turnover_rate=excluded.turnover_rate,
+                total_mv_wan=excluded.total_mv_wan,
                 sealed_amount_wan=excluded.sealed_amount_wan,
                 next_open=excluded.next_open,
                 future_closes_json=excluded.future_closes_json,
@@ -46,6 +47,7 @@ def upsert_daily_quotes(conn: sqlite3.Connection, quotes: Iterable[DailyQuoteIn]
                 quote.close,
                 quote.volume_ratio,
                 quote.turnover_rate,
+                quote.total_mv_wan,
                 quote.sealed_amount_wan,
                 quote.next_open,
                 json.dumps(quote.future_closes, ensure_ascii=False),
@@ -395,6 +397,7 @@ def row_to_quote(row: sqlite3.Row, minute_trades: list[MinuteTrade]) -> DailyQuo
         close=row["close"],
         volume_ratio=row["volume_ratio"],
         turnover_rate=row["turnover_rate"],
+        total_mv_wan=row["total_mv_wan"] if "total_mv_wan" in row.keys() else 0.0,
         sealed_amount_wan=row["sealed_amount_wan"],
         next_open=row["next_open"],
         future_closes=json.loads(row["future_closes_json"]),
@@ -425,6 +428,7 @@ def row_to_pick(conn: sqlite3.Connection, row: sqlite3.Row) -> StockPickOut:
         change_percent=row["change_percent"],
         volume_ratio=row["volume_ratio"],
         turnover_rate=row["turnover_rate"],
+        total_mv_wan=row["total_mv_wan"] if "total_mv_wan" in row.keys() else 0.0,
         sealed_amount_wan=row["sealed_amount_wan"],
         stop_loss_price=row["stop_loss_price"],
         limit_shape=row["limit_shape"] if "limit_shape" in row.keys() else "",

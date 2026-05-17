@@ -79,7 +79,7 @@ def fetch_daily_quotes_for_date(
         token,
         "daily_basic",
         {"trade_date": ts_date},
-        "ts_code,turnover_rate,volume_ratio",
+        "ts_code,turnover_rate,volume_ratio,total_mv",
     )
     daily_basic_by_code = {item["ts_code"]: item for item in basic_rows}
 
@@ -107,6 +107,7 @@ def fetch_daily_quotes_for_date(
                 close=close,
                 volume_ratio=as_float(daily_basic.get("volume_ratio")),
                 turnover_rate=as_float(daily_basic.get("turnover_rate")),
+                total_mv_wan=as_float(daily_basic.get("total_mv")),
                 sealed_amount_wan=0.0,
                 next_open=None,
                 future_closes=[],

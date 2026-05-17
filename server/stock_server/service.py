@@ -36,6 +36,7 @@ class BacktestProfile:
     first_limit_only: bool
     exclude_st: bool = True
     limit_shapes: set[str] | None = None
+    min_total_mv_wan: float | None = None
     engine_strategy_id: str = "old_cat"
     rank_mode: str = RANK_MODE_RECENT_5DAY_CHANGE
 
@@ -73,14 +74,6 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         exclude_st=True,
         limit_shapes={"afternoon"},
     ),
-    "old_cat_resealed_first": BacktestProfile(
-        id="old_cat_resealed_first",
-        name="老猫对照：回封板",
-        description="只做首板且涨停形态为炸板回封；其余买卖规则与老猫战法一致。",
-        first_limit_only=True,
-        exclude_st=True,
-        limit_shapes={"resealed"},
-    ),
     "old_cat_half_take_profit": BacktestProfile(
         id="old_cat_half_take_profit",
         name="老猫对照：止盈卖半",
@@ -89,6 +82,15 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         exclude_st=True,
         limit_shapes={"morning"},
         engine_strategy_id="old_cat_half_take_profit",
+    ),
+    "old_cat_min_mv_50b": BacktestProfile(
+        id="old_cat_min_mv_50b",
+        name="老猫对照：市值不低于50亿",
+        description="选股条件与老猫战法一致；市值小于 50 亿的股票不买。",
+        first_limit_only=True,
+        exclude_st=True,
+        limit_shapes={"morning"},
+        min_total_mv_wan=500000.0,
     ),
 }
 
@@ -359,6 +361,8 @@ def apply_backtest_profile(
         filtered = [snapshot for snapshot in filtered if not is_st_stock(snapshot.name)]
     if profile.limit_shapes is not None:
         filtered = [snapshot for snapshot in filtered if snapshot.limit_shape in profile.limit_shapes]
+    if profile.min_total_mv_wan is not None:
+        filtered = [snapshot for snapshot in filtered if snapshot.total_mv_wan >= profile.min_total_mv_wan]
     if profile.first_limit_only:
         filtered = [snapshot for snapshot in filtered if is_first_limit_up(conn, snapshot)]
     return filtered
@@ -410,6 +414,7 @@ def snapshot_to_pick(
         change_percent=snapshot.change_percent,
         volume_ratio=snapshot.volume_ratio,
         turnover_rate=snapshot.turnover_rate,
+        total_mv_wan=snapshot.total_mv_wan,
         sealed_amount_wan=snapshot.sealed_amount_wan,
         stop_loss_price=snapshot.stop_loss_price,
         limit_shape=snapshot.limit_shape,

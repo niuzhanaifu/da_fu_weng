@@ -41,6 +41,7 @@ class PickSnapshot:
     change_percent: float
     volume_ratio: float
     turnover_rate: float
+    total_mv_wan: float
     sealed_amount_wan: float
     stop_loss_price: float
     limit_shape: str
@@ -104,6 +105,7 @@ def to_pick(quote: DailyQuoteIn) -> PickSnapshot:
         change_percent=(quote.close - quote.previous_close) / quote.previous_close * 100.0,
         volume_ratio=quote.volume_ratio,
         turnover_rate=quote.turnover_rate,
+        total_mv_wan=quote.total_mv_wan,
         sealed_amount_wan=quote.sealed_amount_wan,
         stop_loss_price=stop_loss_price(quote),
         limit_shape=shape,

@@ -43,6 +43,7 @@ def init_db() -> None:
                 close REAL NOT NULL,
                 volume_ratio REAL NOT NULL DEFAULT 0,
                 turnover_rate REAL NOT NULL DEFAULT 0,
+                total_mv_wan REAL NOT NULL DEFAULT 0,
                 sealed_amount_wan REAL NOT NULL DEFAULT 0,
                 next_open REAL,
                 future_closes_json TEXT NOT NULL DEFAULT '[]',
@@ -102,3 +103,10 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_stock_picks_date ON stock_picks(trade_date);
             """
         )
+        ensure_column(conn, "daily_quotes", "total_mv_wan", "REAL NOT NULL DEFAULT 0")
+
+
+def ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

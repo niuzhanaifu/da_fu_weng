@@ -38,6 +38,7 @@ class DailyQuoteIn(BaseModel):
     close: float
     volume_ratio: float = 0
     turnover_rate: float = 0
+    total_mv_wan: float = 0
     sealed_amount_wan: float = 0
     next_open: Optional[float] = None
     future_closes: List[float] = Field(default_factory=list)
@@ -67,6 +68,7 @@ class StockPickOut(BaseModel):
     change_percent: float
     volume_ratio: float
     turnover_rate: float
+    total_mv_wan: float = 0.0
     sealed_amount_wan: float
     stop_loss_price: float
     limit_shape: str = ""
