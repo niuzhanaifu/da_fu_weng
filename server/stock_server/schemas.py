@@ -176,3 +176,58 @@ class SelectionRunOut(BaseModel):
     generated_at: str
     pick_count: int
     indicator_ids: List[str]
+
+
+class TradeBuyRequest(BaseModel):
+    code: str
+    name: str
+    board: MarketBoard
+    source_trade_date: str
+    buy_date: Optional[str] = None
+    buy_price: float = Field(gt=0)
+    shares: int = Field(gt=0)
+    stop_loss_price: float = Field(gt=0)
+
+
+class TradeSellRequest(BaseModel):
+    sell_date: Optional[str] = None
+    sell_price: float = Field(gt=0)
+    shares: int = Field(gt=0)
+
+
+class TradePositionOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    board: MarketBoard
+    source_trade_date: str
+    buy_date: str
+    buy_price: float
+    buy_shares: int
+    stop_loss_price: float
+    latest_trade_date: Optional[str] = None
+    latest_close: Optional[float] = None
+    stop_loss_loss_percent: float = 0.0
+    unrealized_profit_amount: float = 0.0
+    unrealized_profit_percent: float = 0.0
+    status: str
+    sell_signal: bool = False
+    sell_date: Optional[str] = None
+    sell_price: Optional[float] = None
+    sell_shares: Optional[int] = None
+    profit_amount: Optional[float] = None
+    created_at: str
+    updated_at: str
+
+
+class TradeStatsOut(BaseModel):
+    holding_count: int
+    total_trades: int
+    win_rate: float
+    total_profit_amount: float
+
+
+class TradeBookOut(BaseModel):
+    open_positions: List[TradePositionOut]
+    history: List[TradePositionOut]
+    stats: TradeStatsOut

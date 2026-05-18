@@ -10,6 +10,9 @@ import com.example.myapplication.market.MarketBoard
 import com.example.myapplication.market.MinuteTrade
 import com.example.myapplication.market.SelectionStrategy
 import com.example.myapplication.market.StockPick
+import com.example.myapplication.market.TradeBook
+import com.example.myapplication.market.TradePosition
+import com.example.myapplication.market.TradeStats
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -78,6 +81,62 @@ object MarketApiClient {
             put("indicator_ids", JSONArray(indicatorIds.sorted()))
         }
         postJson("/api/v1/selections/run", payload).toDailyPickGroup()
+    }
+
+    suspend fun fetchTradeBook(): TradeBook = withContext(Dispatchers.IO) {
+        getJson("/api/v1/trades").toTradeBook()
+    }
+
+    suspend fun recordBuy(
+        pick: StockPick,
+        buyPrice: Double,
+        shares: Int,
+        buyDate: String
+    ): TradePosition = withContext(Dispatchers.IO) {
+        val payload = JSONObject().apply {
+            put("code", pick.code)
+            put("name", pick.name)
+            put("board", if (pick.board == MarketBoard.ChiNext) "chinext" else "main")
+            put("source_trade_date", pick.date)
+            put("buy_date", buyDate)
+            put("buy_price", buyPrice)
+            put("shares", shares)
+            put("stop_loss_price", pick.stopLossPrice)
+        }
+        postJson("/api/v1/trades/buy", payload).toTradePosition()
+    }
+
+    suspend fun recordSell(
+        tradeId: Int,
+        sellPrice: Double,
+        shares: Int,
+        sellDate: String
+    ): TradePosition = withContext(Dispatchers.IO) {
+        val payload = JSONObject().apply {
+            put("sell_date", sellDate)
+            put("sell_price", sellPrice)
+            put("shares", shares)
+        }
+        postJson("/api/v1/trades/$tradeId/sell", payload).toTradePosition()
+    }
+
+    private fun getJson(path: String, readTimeoutMs: Int = 15_000): JSONObject {
+        val connection = (URL("$BASE_URL$path").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 8000
+            readTimeout = readTimeoutMs
+            setRequestProperty("Accept", "application/json")
+        }
+
+        val statusCode = connection.responseCode
+        val stream = if (statusCode in 200..299) connection.inputStream else connection.errorStream
+        val body = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+        connection.disconnect()
+
+        if (statusCode !in 200..299) {
+            throw IllegalStateException("服务端返回 $statusCode：$body")
+        }
+        return JSONObject(body)
     }
 
     private fun postJson(path: String, payload: JSONObject, readTimeoutMs: Int = 15_000): JSONObject {
@@ -201,6 +260,54 @@ object MarketApiClient {
         return DailyPickGroup(
             date = getString("trade_date"),
             picks = picks
+        )
+    }
+
+    private fun JSONObject.toTradeBook(): TradeBook {
+        return TradeBook(
+            openPositions = getJSONArray("open_positions").toTradePositions(),
+            history = getJSONArray("history").toTradePositions(),
+            stats = getJSONObject("stats").let { stats ->
+                TradeStats(
+                    holdingCount = stats.optInt("holding_count", 0),
+                    totalTrades = stats.optInt("total_trades", 0),
+                    winRate = stats.optDouble("win_rate", 0.0),
+                    totalProfitAmount = stats.optDouble("total_profit_amount", 0.0)
+                )
+            }
+        )
+    }
+
+    private fun JSONArray.toTradePositions(): List<TradePosition> {
+        return buildList {
+            for (index in 0 until length()) {
+                add(getJSONObject(index).toTradePosition())
+            }
+        }
+    }
+
+    private fun JSONObject.toTradePosition(): TradePosition {
+        return TradePosition(
+            id = getInt("id"),
+            code = getString("code"),
+            name = getString("name"),
+            board = getString("board").toMarketBoard(),
+            sourceTradeDate = getString("source_trade_date"),
+            buyDate = getString("buy_date"),
+            buyPrice = getDouble("buy_price"),
+            buyShares = getInt("buy_shares"),
+            stopLossPrice = getDouble("stop_loss_price"),
+            latestTradeDate = if (isNull("latest_trade_date")) null else getString("latest_trade_date"),
+            latestClose = if (isNull("latest_close")) null else getDouble("latest_close"),
+            stopLossLossPercent = optDouble("stop_loss_loss_percent", 0.0),
+            unrealizedProfitAmount = optDouble("unrealized_profit_amount", 0.0),
+            unrealizedProfitPercent = optDouble("unrealized_profit_percent", 0.0),
+            status = getString("status"),
+            sellSignal = optBoolean("sell_signal", false),
+            sellDate = if (isNull("sell_date")) null else getString("sell_date"),
+            sellPrice = if (isNull("sell_price")) null else getDouble("sell_price"),
+            sellShares = if (isNull("sell_shares")) null else getInt("sell_shares"),
+            profitAmount = if (isNull("profit_amount")) null else getDouble("profit_amount")
         )
     }
 

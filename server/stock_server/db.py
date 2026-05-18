@@ -95,12 +95,33 @@ def init_db() -> None:
                 future_closes_json TEXT NOT NULL DEFAULT '[]'
             );
 
+            CREATE TABLE IF NOT EXISTS trade_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL,
+                name TEXT NOT NULL,
+                board TEXT NOT NULL,
+                source_trade_date TEXT NOT NULL,
+                buy_date TEXT NOT NULL,
+                buy_price REAL NOT NULL,
+                buy_shares INTEGER NOT NULL,
+                stop_loss_price REAL NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                sell_date TEXT,
+                sell_price REAL,
+                sell_shares INTEGER,
+                profit_amount REAL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE INDEX IF NOT EXISTS idx_daily_quotes_date ON daily_quotes(trade_date);
             CREATE INDEX IF NOT EXISTS idx_daily_quotes_code_date ON daily_quotes(code, trade_date);
             CREATE INDEX IF NOT EXISTS idx_minute_trades_quote ON minute_trades(trade_date, code);
             CREATE INDEX IF NOT EXISTS idx_market_index_quotes_code_date ON market_index_quotes(code, trade_date);
             CREATE INDEX IF NOT EXISTS idx_selection_runs_date ON selection_runs(trade_date, generated_at);
             CREATE INDEX IF NOT EXISTS idx_stock_picks_date ON stock_picks(trade_date);
+            CREATE INDEX IF NOT EXISTS idx_trade_records_status ON trade_records(status, buy_date);
+            CREATE INDEX IF NOT EXISTS idx_trade_records_code ON trade_records(code, buy_date);
             """
         )
         ensure_column(conn, "daily_quotes", "total_mv_wan", "REAL NOT NULL DEFAULT 0")

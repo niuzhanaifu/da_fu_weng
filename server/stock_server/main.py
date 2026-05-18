@@ -22,6 +22,10 @@ from .schemas import (
     SelectionStrategyOption,
     SelectionRequest,
     SelectionRunOut,
+    TradeBookOut,
+    TradeBuyRequest,
+    TradePositionOut,
+    TradeSellRequest,
 )
 from .service import (
     BACKTEST_PROFILES,
@@ -29,6 +33,9 @@ from .service import (
     SELECTION_PROFILES,
     get_group,
     run_backtest_experiment,
+    get_trade_book,
+    record_buy,
+    record_sell,
     run_daily_selection,
     run_saved_backtest,
     run_selection_group,
@@ -223,6 +230,43 @@ def create_app() -> FastAPI:
             request.board.value if request.board else "all",
             len(result.items),
             elapsed_ms,
+        )
+        return result
+
+    @app.get("/api/v1/trades", response_model=TradeBookOut)
+    def trades(conn=Depends(get_db)) -> TradeBookOut:
+        return get_trade_book(conn)
+
+    @app.post("/api/v1/trades/buy", response_model=TradePositionOut)
+    def trade_buy(request: TradeBuyRequest, conn=Depends(get_db)) -> TradePositionOut:
+        try:
+            result = record_buy(conn, request)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.info(
+            "trade buy id=%s code=%s buy_date=%s shares=%s price=%.3f",
+            result.id,
+            result.code,
+            result.buy_date,
+            result.buy_shares,
+            result.buy_price,
+        )
+        return result
+
+    @app.post("/api/v1/trades/{trade_id}/sell", response_model=TradePositionOut)
+    def trade_sell(trade_id: int, request: TradeSellRequest, conn=Depends(get_db)) -> TradePositionOut:
+        try:
+            result = record_sell(conn, trade_id, request)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.info(
+            "trade sell id=%s code=%s sell_date=%s shares=%s price=%.3f profit=%.2f",
+            result.id,
+            result.code,
+            result.sell_date,
+            result.sell_shares,
+            result.sell_price or 0.0,
+            result.profit_amount or 0.0,
         )
         return result
 

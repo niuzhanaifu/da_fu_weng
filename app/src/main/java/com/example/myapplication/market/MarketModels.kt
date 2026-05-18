@@ -155,6 +155,42 @@ data class BacktestExperimentResult(
     val items: List<BacktestExperimentItem>
 )
 
+data class TradePosition(
+    val id: Int,
+    val code: String,
+    val name: String,
+    val board: MarketBoard,
+    val sourceTradeDate: String,
+    val buyDate: String,
+    val buyPrice: Double,
+    val buyShares: Int,
+    val stopLossPrice: Double,
+    val latestTradeDate: String?,
+    val latestClose: Double?,
+    val stopLossLossPercent: Double,
+    val unrealizedProfitAmount: Double,
+    val unrealizedProfitPercent: Double,
+    val status: String,
+    val sellSignal: Boolean,
+    val sellDate: String?,
+    val sellPrice: Double?,
+    val sellShares: Int?,
+    val profitAmount: Double?
+)
+
+data class TradeStats(
+    val holdingCount: Int,
+    val totalTrades: Int,
+    val winRate: Double,
+    val totalProfitAmount: Double
+)
+
+data class TradeBook(
+    val openPositions: List<TradePosition>,
+    val history: List<TradePosition>,
+    val stats: TradeStats
+)
+
 enum class BacktestStrategy(
     val id: String,
     val title: String,

@@ -16,6 +16,7 @@ local.properties
 __pycache__/
 *.py[cod]
 server/.venv/
+server/.env
 server/data/*.sqlite3
 server/data/*.sqlite3-*
 server/logs/

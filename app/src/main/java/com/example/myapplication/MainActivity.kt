@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -50,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,6 +84,8 @@ import com.example.myapplication.market.SampleMarketData
 import com.example.myapplication.market.SelectionStrategy
 import com.example.myapplication.market.StockPick
 import com.example.myapplication.market.StockSelectionEngine
+import com.example.myapplication.market.TradeBook
+import com.example.myapplication.market.TradePosition
 import com.example.myapplication.market.asPercent
 import com.example.myapplication.market.asPrice
 import com.example.myapplication.network.MarketApiClient
@@ -89,6 +93,7 @@ import com.example.myapplication.storage.BacktestHistoryStore
 import com.example.myapplication.storage.SelectionCache
 import com.example.myapplication.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -103,6 +108,7 @@ private val Muted = Color(0xFF6B7280)
 private val RiseRed = Color(0xFFD92323)
 private val FallGreen = Color(0xFF167A54)
 private val ChiNextBlue = Color(0xFF1266D6)
+private val ActionBlue = Color(0xFF0B4F8A)
 
 private enum class PickBoardFilter(val label: String) {
     All("全部"),
@@ -134,6 +140,7 @@ fun StockApp() {
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
     var selectedStock by remember { mutableStateOf<StockPick?>(null) }
+    var selectedBuyPick by remember { mutableStateOf<StockPick?>(null) }
     var enabledIndicators by remember { mutableStateOf(setOf("volume", "seal", "close")) }
     var selectedSelectionStrategy by remember { mutableStateOf(SelectionStrategy.OldCatBuy) }
     val cachedGroup = remember { SelectionCache.load(context, selectedSelectionStrategy, enabledIndicators) }
@@ -166,7 +173,7 @@ fun StockApp() {
         containerColor = PageBackground,
         bottomBar = {
             NavigationBar(containerColor = Panel) {
-                listOf("选股", "回测", "指标").forEachIndexed { index, label ->
+                listOf("选股", "回测", "指标", "交易").forEachIndexed { index, label ->
                     NavigationBarItem(
                         selected = selectedTab == index,
                         onClick = {
@@ -204,10 +211,11 @@ fun StockApp() {
                         selectedPickDate = group.date
                         groups = listOf(group)
                     },
-                    onStockClick = { selectedStock = it }
+                    onStockClick = { selectedStock = it },
+                    onBuyClick = { selectedBuyPick = it }
                 )
                 1 -> BacktestPage(groups)
-                else -> IndicatorsPage(
+                2 -> IndicatorsPage(
                     enabledIndicators = enabledIndicators,
                     onChange = {
                         enabledIndicators = it
@@ -217,8 +225,20 @@ fun StockApp() {
                     },
                     onClearData = { groups = emptyList() }
                 )
+                else -> TradingPage()
             }
         }
+    }
+
+    selectedBuyPick?.let { pick ->
+        BuyTradeDialog(
+            pick = pick,
+            onDismiss = { selectedBuyPick = null },
+            onSaved = {
+                selectedBuyPick = null
+                selectedTab = 3
+            }
+        )
     }
 }
 
@@ -231,7 +251,8 @@ private fun PickGroupsPage(
     selectedStrategy: SelectionStrategy,
     onSelectedStrategyChange: (SelectionStrategy) -> Unit,
     onSelectionResult: (DailyPickGroup) -> Unit,
-    onStockClick: (StockPick) -> Unit
+    onStockClick: (StockPick) -> Unit,
+    onBuyClick: (StockPick) -> Unit
 ) {
     val group = groups.firstOrNull { it.date == selectedDate }
     var boardFilter by remember { mutableStateOf(PickBoardFilter.All) }
@@ -318,6 +339,7 @@ private fun PickGroupsPage(
             items(visiblePicks) { pick ->
                 StockPickCard(
                     pick = pick,
+                    onBuyClick = { onBuyClick(pick) },
                     onClick = {
                         AppLogger.d("PickGroups", "open stock ${pick.code}")
                         onStockClick(pick)
@@ -445,7 +467,10 @@ private fun SelectionActionCard(
                 if (isSelecting) {
                     CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 3.dp)
                 } else {
-                    TextButton(onClick = onRun) {
+                    Button(
+                        onClick = onRun,
+                        colors = ButtonDefaults.buttonColors(containerColor = ActionBlue)
+                    ) {
                         Text("开始选股")
                     }
                 }
@@ -828,8 +853,319 @@ private fun IndicatorsPage(
 }
 
 @Composable
+private fun BuyTradeDialog(
+    pick: StockPick,
+    onDismiss: () -> Unit,
+    onSaved: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var buyPriceText by remember(pick.code) { mutableStateOf((pick.latestClose ?: pick.nextOpen).asPrice()) }
+    var lotsText by remember(pick.code) { mutableStateOf("1") }
+    var isSaving by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val buyPrice = buyPriceText.toDoubleOrNull()
+    val lots = lotsText.toIntOrNull()
+
+    AlertDialog(
+        onDismissRequest = { if (!isSaving) onDismiss() },
+        title = { Text("记录买入") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("${pick.name} ${pick.code}", color = Ink, fontWeight = FontWeight.Bold)
+                Text("止损线 ${pick.stopLossPrice.asPrice()} / 选股日 ${pick.date}", color = Muted, fontSize = 12.sp)
+                OutlinedTextField(
+                    value = buyPriceText,
+                    onValueChange = { raw -> buyPriceText = raw.filter { it.isDigit() || it == '.' }.take(8) },
+                    label = { Text("买入价") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = lotsText,
+                    onValueChange = { raw -> lotsText = raw.filter { it.isDigit() }.take(6) },
+                    label = { Text("买入手数") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                errorMessage?.let { Text(it, color = FallGreen, fontSize = 12.sp) }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !isSaving && buyPrice != null && lots != null && buyPrice > 0.0 && lots > 0,
+                colors = ButtonDefaults.buttonColors(containerColor = ActionBlue),
+                onClick = {
+                    val price = buyPrice ?: return@Button
+                    val count = lots ?: return@Button
+                    isSaving = true
+                    errorMessage = null
+                    scope.launch {
+                        try {
+                            MarketApiClient.recordBuy(
+                                pick = pick,
+                                buyPrice = price,
+                                shares = count * 100,
+                                buyDate = todayDateString()
+                            )
+                            onSaved()
+                        } catch (error: Exception) {
+                            errorMessage = error.message ?: "买入记录保存失败"
+                        } finally {
+                            isSaving = false
+                        }
+                    }
+                }
+            ) {
+                Text(if (isSaving) "保存中" else "保存")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isSaving,
+                colors = ButtonDefaults.textButtonColors(contentColor = ActionBlue)
+            ) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
+private fun SellTradeDialog(
+    position: TradePosition,
+    onDismiss: () -> Unit,
+    onSaved: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var sellPriceText by remember(position.id) { mutableStateOf((position.latestClose ?: position.buyPrice).asPrice()) }
+    var sharesText by remember(position.id) { mutableStateOf(position.buyShares.toString()) }
+    var isSaving by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val sellPrice = sellPriceText.toDoubleOrNull()
+    val shares = sharesText.toIntOrNull()
+
+    AlertDialog(
+        onDismissRequest = { if (!isSaving) onDismiss() },
+        title = { Text("记录卖出") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("${position.name} ${position.code}", color = Ink, fontWeight = FontWeight.Bold)
+                Text("买入 ${position.buyPrice.asPrice()} / 持仓 ${position.buyShares}", color = Muted, fontSize = 12.sp)
+                OutlinedTextField(
+                    value = sellPriceText,
+                    onValueChange = { raw -> sellPriceText = raw.filter { it.isDigit() || it == '.' }.take(8) },
+                    label = { Text("卖出价") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = sharesText,
+                    onValueChange = { raw -> sharesText = raw.filter { it.isDigit() }.take(8) },
+                    label = { Text("成交股数") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                errorMessage?.let { Text(it, color = FallGreen, fontSize = 12.sp) }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !isSaving && sellPrice != null && shares != null && sellPrice > 0.0 && shares > 0,
+                colors = ButtonDefaults.buttonColors(containerColor = ActionBlue),
+                onClick = {
+                    val price = sellPrice ?: return@Button
+                    val count = shares ?: return@Button
+                    isSaving = true
+                    errorMessage = null
+                    scope.launch {
+                        try {
+                            MarketApiClient.recordSell(
+                                tradeId = position.id,
+                                sellPrice = price,
+                                shares = count,
+                                sellDate = todayDateString()
+                            )
+                            onSaved()
+                        } catch (error: Exception) {
+                            errorMessage = error.message ?: "卖出记录保存失败"
+                        } finally {
+                            isSaving = false
+                        }
+                    }
+                }
+            ) {
+                Text(if (isSaving) "保存中" else "保存")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isSaving,
+                colors = ButtonDefaults.textButtonColors(contentColor = ActionBlue)
+            ) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
+private fun TradingPage() {
+    var refreshRequest by remember { mutableIntStateOf(0) }
+    var tradeBook by remember { mutableStateOf<TradeBook?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var sellingPosition by remember { mutableStateOf<TradePosition?>(null) }
+
+    LaunchedEffect(refreshRequest) {
+        isLoading = true
+        errorMessage = null
+        try {
+            tradeBook = MarketApiClient.fetchTradeBook()
+        } catch (error: Exception) {
+            errorMessage = error.message ?: "交易记录加载失败"
+        } finally {
+            isLoading = false
+        }
+    }
+
+    sellingPosition?.let { position ->
+        SellTradeDialog(
+            position = position,
+            onDismiss = { sellingPosition = null },
+            onSaved = {
+                sellingPosition = null
+                refreshRequest += 1
+            }
+        )
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            AppHeader(
+                title = "交易",
+                subtitle = "老猫战法买入后记录持仓，跟踪最新收盘价、止损线、止损亏损率和卖出信号。"
+            )
+        }
+        if (isLoading) {
+            item { BacktestProgressCard() }
+        }
+        errorMessage?.let { message ->
+            item { ErrorState("交易记录加载失败：$message") }
+        }
+        tradeBook?.let { book ->
+            item { TradeStatsCards(book) }
+            item { Text("当前持仓", color = Ink, fontWeight = FontWeight.Bold) }
+            if (book.openPositions.isEmpty()) {
+                item { EmptyState("暂无持仓。请在选股结果中点击买入后记录。") }
+            } else {
+                items(book.openPositions) { position ->
+                    TradePositionCard(
+                        position = position,
+                        onSell = { sellingPosition = position }
+                    )
+                }
+            }
+            item { Text("历史交易", color = Ink, fontWeight = FontWeight.Bold) }
+            if (book.history.isEmpty()) {
+                item { EmptyState("暂无历史交易。卖出持仓后会自动进入历史交易。") }
+            } else {
+                items(book.history) { position ->
+                    TradePositionCard(position = position, onSell = null)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TradeStatsCards(book: TradeBook) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MetricCard("持仓", "${book.stats.holdingCount}", Ink, Modifier.weight(1f))
+            MetricCard("历史交易", "${book.stats.totalTrades}", Ink, Modifier.weight(1f))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MetricCard("累计盈亏", book.stats.totalProfitAmount.asPrice(), profitColor(book.stats.totalProfitAmount), Modifier.weight(1f))
+            MetricCard("胜率", book.stats.winRate.asPercent(), RiseRed, Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun TradePositionCard(
+    position: TradePosition,
+    onSell: (() -> Unit)?
+) {
+    val statusLabel = when {
+        position.status == "closed" -> "已卖出"
+        position.sellSignal -> "卖出"
+        else -> "持有"
+    }
+    val statusColor = when {
+        position.status == "closed" -> Muted
+        position.sellSignal -> FallGreen
+        else -> RiseRed
+    }
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = Panel),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("${position.name} ${position.code}", color = Ink, fontWeight = FontWeight.Bold)
+                    Text("${position.buyDate} 买入 / ${position.board.label}", color = Muted, fontSize = 12.sp)
+                }
+                Text(statusLabel, color = statusColor, fontWeight = FontWeight.Bold)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QuoteCell("买入价", position.buyPrice.asPrice(), Ink, Modifier.weight(1f))
+                QuoteCell("最新收盘", position.latestClose?.asPrice() ?: "暂无", RiseRed, Modifier.weight(1f))
+                QuoteCell("止损线", position.stopLossPrice.asPrice(), FallGreen, Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QuoteCell("止损亏损率", position.stopLossLossPercent.asPercent(), FallGreen, Modifier.weight(1f))
+                QuoteCell("浮动盈亏", position.unrealizedProfitAmount.asPrice(), profitColor(position.unrealizedProfitAmount), Modifier.weight(1f))
+                QuoteCell("持仓", "${position.buyShares}股", Ink, Modifier.weight(1f))
+            }
+            position.latestTradeDate?.let {
+                Text("行情日期 $it", color = Muted, fontSize = 12.sp)
+            }
+            if (position.status == "closed") {
+                Text(
+                    "卖出 ${position.sellDate.orEmpty()} / ${position.sellPrice?.asPrice() ?: "--"} / 盈亏 ${(position.profitAmount ?: 0.0).asPrice()}",
+                    color = profitColor(position.profitAmount ?: 0.0),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            onSell?.let {
+                Button(
+                    onClick = it,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = ActionBlue)
+                ) {
+                    Text("卖出")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun StockPickCard(
     pick: StockPick,
+    onBuyClick: () -> Unit,
     onClick: () -> Unit
 ) {
     ElevatedCard(
@@ -858,6 +1194,13 @@ private fun StockPickCard(
             }
             pick.latestClose?.let { latest ->
                 Text("最新收盘 ${latest.asPrice()} / ${pick.latestTradeDate.orEmpty()}", color = Muted, fontSize = 12.sp)
+            }
+            Button(
+                onClick = onBuyClick,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = ActionBlue)
+            ) {
+                Text("买入")
             }
         }
     }
@@ -1110,7 +1453,8 @@ private fun BacktestControls(
                 onClick = onRun,
                 enabled = !isRunning &&
                     (takeProfitText.toDoubleOrNull() ?: 0.0) > 0.0,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = ActionBlue)
             ) {
                 Text(if (isRunning) "回测中" else "开始回测")
             }
@@ -1161,7 +1505,10 @@ private fun BacktestExperimentCard(
                 if (isRunning) {
                     CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 3.dp)
                 } else {
-                    TextButton(onClick = onRun) {
+                    Button(
+                        onClick = onRun,
+                        colors = ButtonDefaults.buttonColors(containerColor = ActionBlue)
+                    ) {
                         Text("开始实验")
                     }
                 }
@@ -1201,7 +1548,10 @@ private fun BacktestExperimentRow(
                     fontWeight = FontWeight.Bold
                 )
             }
-            TextButton(onClick = onOpen) {
+            TextButton(
+                onClick = onOpen,
+                colors = ButtonDefaults.textButtonColors(contentColor = ActionBlue)
+            ) {
                 Text("查看")
             }
         }
@@ -1276,7 +1626,10 @@ private fun BacktestHistoryRow(
                     fontWeight = FontWeight.Bold
                 )
             }
-            TextButton(onClick = onOpen) {
+            TextButton(
+                onClick = onOpen,
+                colors = ButtonDefaults.textButtonColors(contentColor = ActionBlue)
+            ) {
                 Text("查看")
             }
             TextButton(onClick = onDelete) {

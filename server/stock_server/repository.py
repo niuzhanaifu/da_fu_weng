@@ -4,7 +4,7 @@ import json
 import sqlite3
 from typing import Iterable
 
-from .schemas import DailyCandleOut, DailyQuoteIn, MarketBoard, MinuteTrade, StockPickOut
+from .schemas import DailyCandleOut, DailyQuoteIn, MarketBoard, MinuteTrade, StockPickOut, TradeBuyRequest, TradePositionOut, TradeSellRequest
 
 
 def upsert_daily_quotes(conn: sqlite3.Connection, quotes: Iterable[DailyQuoteIn]) -> int:
@@ -383,6 +383,85 @@ def load_daily_candles(
     ][::-1]
 
 
+def create_trade_record(conn: sqlite3.Connection, request: TradeBuyRequest, buy_date: str) -> TradePositionOut:
+    cursor = conn.execute(
+        """
+        INSERT INTO trade_records (
+            code, name, board, source_trade_date, buy_date, buy_price, buy_shares, stop_loss_price,
+            status, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', CURRENT_TIMESTAMP)
+        """,
+        (
+            request.code,
+            request.name,
+            request.board.value,
+            request.source_trade_date,
+            buy_date,
+            request.buy_price,
+            request.shares,
+            request.stop_loss_price,
+        ),
+    )
+    conn.commit()
+    row = load_trade_record_row(conn, int(cursor.lastrowid))
+    if row is None:
+        raise ValueError("Trade record was not created.")
+    return row_to_trade_position(conn, row)
+
+
+def close_trade_record(conn: sqlite3.Connection, trade_id: int, request: TradeSellRequest, sell_date: str) -> TradePositionOut:
+    row = load_trade_record_row(conn, trade_id)
+    if row is None:
+        raise ValueError("Trade record not found.")
+    if row["status"] != "open":
+        raise ValueError("Trade record is already closed.")
+    if request.shares > int(row["buy_shares"]):
+        raise ValueError("Sell shares cannot exceed buy shares.")
+
+    profit_amount = (request.sell_price - row["buy_price"]) * request.shares
+    conn.execute(
+        """
+        UPDATE trade_records
+        SET status = 'closed',
+            sell_date = ?,
+            sell_price = ?,
+            sell_shares = ?,
+            profit_amount = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (sell_date, request.sell_price, request.shares, profit_amount, trade_id),
+    )
+    conn.commit()
+    closed = load_trade_record_row(conn, trade_id)
+    if closed is None:
+        raise ValueError("Trade record not found after closing.")
+    return row_to_trade_position(conn, closed)
+
+
+def load_trade_records(conn: sqlite3.Connection) -> tuple[list[TradePositionOut], list[TradePositionOut]]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM trade_records
+        ORDER BY
+            CASE status WHEN 'open' THEN 0 ELSE 1 END,
+            COALESCE(sell_date, buy_date) DESC,
+            id DESC
+        """
+    ).fetchall()
+    positions = [row_to_trade_position(conn, row) for row in rows]
+    return (
+        [position for position in positions if position.status == "open"],
+        [position for position in positions if position.status == "closed"],
+    )
+
+
+def load_trade_record_row(conn: sqlite3.Connection, trade_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM trade_records WHERE id = ?", (trade_id,)).fetchone()
+
+
 def row_to_quote(row: sqlite3.Row, minute_trades: list[MinuteTrade]) -> DailyQuoteIn:
     return DailyQuoteIn(
         trade_date=row["trade_date"],
@@ -446,4 +525,42 @@ def row_to_pick(conn: sqlite3.Connection, row: sqlite3.Row) -> StockPickOut:
             MinuteTrade(minute=item["minute"], price=item["price"], volume=item["volume"])
             for item in minute_rows
         ],
+    )
+
+
+def row_to_trade_position(conn: sqlite3.Connection, row: sqlite3.Row) -> TradePositionOut:
+    latest = latest_quote_for_code(conn, row["code"])
+    latest_close = latest["close"] if latest else None
+    latest_trade_date = latest["trade_date"] if latest else None
+    buy_price = float(row["buy_price"])
+    buy_shares = int(row["buy_shares"])
+    stop_loss_price = float(row["stop_loss_price"])
+    stop_loss_loss_percent = ((stop_loss_price - buy_price) / buy_price * 100.0) if buy_price > 0 else 0.0
+    mark_price = latest_close if latest_close is not None else buy_price
+    unrealized_profit_amount = (mark_price - buy_price) * buy_shares
+    unrealized_profit_percent = ((mark_price - buy_price) / buy_price * 100.0) if buy_price > 0 else 0.0
+    status = row["status"]
+    return TradePositionOut(
+        id=int(row["id"]),
+        code=row["code"],
+        name=row["name"],
+        board=MarketBoard(row["board"]),
+        source_trade_date=row["source_trade_date"],
+        buy_date=row["buy_date"],
+        buy_price=buy_price,
+        buy_shares=buy_shares,
+        stop_loss_price=stop_loss_price,
+        latest_trade_date=latest_trade_date,
+        latest_close=latest_close,
+        stop_loss_loss_percent=stop_loss_loss_percent,
+        unrealized_profit_amount=unrealized_profit_amount,
+        unrealized_profit_percent=unrealized_profit_percent,
+        status=status,
+        sell_signal=status == "open" and latest_close is not None and latest_close <= stop_loss_price,
+        sell_date=row["sell_date"],
+        sell_price=row["sell_price"],
+        sell_shares=row["sell_shares"],
+        profit_amount=row["profit_amount"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
     )

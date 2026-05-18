@@ -21,6 +21,7 @@ class BacktestStrategy(Protocol):
 @dataclass(frozen=True)
 class OldCatStrategy:
     id: str = "old_cat"
+    sell_stop_loss_at_stop_price: bool = False
 
     def simulate_trade(self, pick: StockPickOut, holding_days: int, take_profit_percent: float) -> BacktestTradeOut | None:
         if len(pick.future_opens) < 3 or len(pick.future_closes) < 3 or len(pick.future_dates) < 3:
@@ -46,7 +47,7 @@ class OldCatStrategy:
 
         for index, close in enumerate(future_closes):
             if close <= pick.stop_loss_price:
-                sell_price = close
+                sell_price = pick.stop_loss_price if self.sell_stop_loss_at_stop_price else close
                 sell_index = index
                 exit_reason = "老猫战法：分时均价止损"
                 break
@@ -73,6 +74,10 @@ class OldCatStrategy:
 
 STRATEGIES: dict[str, BacktestStrategy] = {
     "old_cat": OldCatStrategy(),
+    "old_cat_timely_stop_loss": OldCatStrategy(
+        id="old_cat_timely_stop_loss",
+        sell_stop_loss_at_stop_price=True,
+    ),
 }
 
 

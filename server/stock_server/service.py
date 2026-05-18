@@ -17,6 +17,11 @@ from .schemas import (
     MarketBoard,
     SelectionRunOut,
     StockPickOut,
+    TradeBookOut,
+    TradeBuyRequest,
+    TradePositionOut,
+    TradeSellRequest,
+    TradeStatsOut,
 )
 from .strategy import PickSnapshot
 from .strategy import select_limit_up
@@ -57,6 +62,15 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         first_limit_only=True,
         exclude_st=True,
         limit_shapes={"morning"},
+    ),
+    "old_cat_timely_stop_loss": BacktestProfile(
+        id="old_cat_timely_stop_loss",
+        name="老猫对照：及时止损",
+        description="选股和买入条件与老猫战法一致；触及止损线时按止损价卖出，而不是按收盘价卖出。",
+        first_limit_only=True,
+        exclude_st=True,
+        limit_shapes={"morning"},
+        engine_strategy_id="old_cat_timely_stop_loss",
     ),
     "old_cat_stop_loss_rank": BacktestProfile(
         id="old_cat_stop_loss_rank",
@@ -272,6 +286,41 @@ def run_backtest_experiment(conn: sqlite3.Connection, request: BacktestRequest) 
     )
 
 
+def get_trade_book(conn: sqlite3.Connection) -> TradeBookOut:
+    open_positions, history = repository.load_trade_records(conn)
+    return TradeBookOut(
+        open_positions=open_positions,
+        history=history,
+        stats=trade_stats(open_positions, history),
+    )
+
+
+def record_buy(conn: sqlite3.Connection, request: TradeBuyRequest) -> TradePositionOut:
+    buy_date = request.buy_date or current_date()
+    return repository.create_trade_record(conn, request, buy_date)
+
+
+def record_sell(conn: sqlite3.Connection, trade_id: int, request: TradeSellRequest) -> TradePositionOut:
+    sell_date = request.sell_date or current_date()
+    return repository.close_trade_record(conn, trade_id, request, sell_date)
+
+
+def trade_stats(open_positions: Sequence[TradePositionOut], history: Sequence[TradePositionOut]) -> TradeStatsOut:
+    total_profit = sum(item.profit_amount or 0.0 for item in history)
+    total_trades = len(history)
+    win_rate = (
+        sum(1 for item in history if (item.profit_amount or 0.0) > 0.0) / total_trades * 100.0
+        if total_trades
+        else 0.0
+    )
+    return TradeStatsOut(
+        holding_count=len(open_positions),
+        total_trades=total_trades,
+        win_rate=win_rate,
+        total_profit_amount=total_profit,
+    )
+
+
 def sync_tushare_quotes(conn: sqlite3.Connection, start_date: str, end_date: str) -> int:
     quotes = fetch_daily_quotes_range(start_date, end_date)
     if not quotes:
@@ -434,3 +483,7 @@ def date_days_before(trade_date: str, days: int) -> str:
 
 def current_timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def current_date() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
