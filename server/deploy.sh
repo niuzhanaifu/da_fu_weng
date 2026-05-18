@@ -153,12 +153,12 @@ EOF
 }
 
 install_daily_sync_cron() {
-  log "Installing daily Tushare sync cron at 17:00"
+  log "Installing daily Tushare sync cron at 17:30"
   mkdir -p "${APP_DIR}/logs"
 
   local marker_start="# dafu-weng daily-sync start"
   local marker_end="# dafu-weng daily-sync end"
-  local cron_line="0 17 * * 1-5 cd ${APP_DIR} && { echo \"[\$(date '+\\%F \\%T \\%Z')] daily sync start\"; . .venv/bin/activate && set -a && . .env && set +a && python -m stock_server.jobs sync-tushare --start-date \$(date +\\%F) --end-date \$(date +\\%F) && python -m stock_server.jobs run-daily-selection --date \$(date +\\%F); echo \"[\$(date '+\\%F \\%T \\%Z')] daily sync finished status=\$?\"; } >> logs/cron.log 2>&1"
+  local cron_line="30 17 * * 1-5 cd ${APP_DIR} && { echo \"[\$(date '+\\%F \\%T \\%Z')] daily sync start\"; . .venv/bin/activate && set -a && . .env && set +a && python -m stock_server.jobs sync-tushare --start-date \$(date +\\%F) --end-date \$(date +\\%F) && python -m stock_server.jobs run-daily-selection --date \$(date +\\%F); status=\$?; echo \"[\$(date '+\\%F \\%T \\%Z')] daily sync finished status=\${status}\"; exit \${status}; } >> logs/cron.log 2>&1"
   local current_cron
 
   current_cron="$(mktemp)"
