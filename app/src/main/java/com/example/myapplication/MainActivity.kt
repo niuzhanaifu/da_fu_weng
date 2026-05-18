@@ -110,6 +110,14 @@ private val FallGreen = Color(0xFF167A54)
 private val ChiNextBlue = Color(0xFF1266D6)
 private val ActionBlue = Color(0xFF0B4F8A)
 
+@Composable
+private fun ActionButtonColors() = ButtonDefaults.buttonColors(
+    containerColor = Color.White,
+    contentColor = ActionBlue,
+    disabledContainerColor = Color(0xFFE5E7EB),
+    disabledContentColor = Muted
+)
+
 private enum class PickBoardFilter(val label: String) {
     All("全部"),
     Main("主板"),
@@ -469,7 +477,7 @@ private fun SelectionActionCard(
                 } else {
                     Button(
                         onClick = onRun,
-                        colors = ButtonDefaults.buttonColors(containerColor = ActionBlue)
+                        colors = ActionButtonColors()
                     ) {
                         Text("开始选股")
                     }
@@ -895,7 +903,7 @@ private fun BuyTradeDialog(
         confirmButton = {
             Button(
                 enabled = !isSaving && buyPrice != null && lots != null && buyPrice > 0.0 && lots > 0,
-                colors = ButtonDefaults.buttonColors(containerColor = ActionBlue),
+                colors = ActionButtonColors(),
                 onClick = {
                     val price = buyPrice ?: return@Button
                     val count = lots ?: return@Button
@@ -976,7 +984,7 @@ private fun SellTradeDialog(
         confirmButton = {
             Button(
                 enabled = !isSaving && sellPrice != null && shares != null && sellPrice > 0.0 && shares > 0,
-                colors = ButtonDefaults.buttonColors(containerColor = ActionBlue),
+                colors = ActionButtonColors(),
                 onClick = {
                     val price = sellPrice ?: return@Button
                     val count = shares ?: return@Button
@@ -1153,7 +1161,7 @@ private fun TradePositionCard(
                 Button(
                     onClick = it,
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = ActionBlue)
+                    colors = ActionButtonColors()
                 ) {
                     Text("卖出")
                 }
@@ -1198,7 +1206,7 @@ private fun StockPickCard(
             Button(
                 onClick = onBuyClick,
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = ActionBlue)
+                colors = ActionButtonColors()
             ) {
                 Text("买入")
             }
@@ -1454,7 +1462,7 @@ private fun BacktestControls(
                 enabled = !isRunning &&
                     (takeProfitText.toDoubleOrNull() ?: 0.0) > 0.0,
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = ActionBlue)
+                colors = ActionButtonColors()
             ) {
                 Text(if (isRunning) "回测中" else "开始回测")
             }
@@ -1507,7 +1515,7 @@ private fun BacktestExperimentCard(
                 } else {
                     Button(
                         onClick = onRun,
-                        colors = ButtonDefaults.buttonColors(containerColor = ActionBlue)
+                        colors = ActionButtonColors()
                     ) {
                         Text("开始实验")
                     }

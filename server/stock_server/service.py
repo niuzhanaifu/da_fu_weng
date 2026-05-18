@@ -58,19 +58,10 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
     "old_cat": BacktestProfile(
         id="old_cat",
         name="老猫战法",
-        description="首板且早上封板、非 ST、非一字板；涨停日后第 2 个交易日开盘涨幅不超过 5% 买入；止盈率可设置，分时均线止损。",
+        description="首板且早上封板、非 ST、非一字板；涨停日后第 2 个交易日开盘涨幅不超过 5% 买入；止盈率可设置，触及分时均线止损线时按止损价卖出。",
         first_limit_only=True,
         exclude_st=True,
         limit_shapes={"morning"},
-    ),
-    "old_cat_timely_stop_loss": BacktestProfile(
-        id="old_cat_timely_stop_loss",
-        name="老猫对照：及时止损",
-        description="选股和买入条件与老猫战法一致；触及止损线时按止损价卖出，而不是按收盘价卖出。",
-        first_limit_only=True,
-        exclude_st=True,
-        limit_shapes={"morning"},
-        engine_strategy_id="old_cat_timely_stop_loss",
     ),
     "old_cat_stop_loss_rank": BacktestProfile(
         id="old_cat_stop_loss_rank",
@@ -80,24 +71,6 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         exclude_st=True,
         limit_shapes={"morning"},
         rank_mode=RANK_MODE_STOP_LOSS_LOSS,
-    ),
-    "old_cat_min_mv_50b": BacktestProfile(
-        id="old_cat_min_mv_50b",
-        name="老猫对照：市值不低于50亿",
-        description="选股条件与老猫战法一致；市值小于 50 亿的股票不买。",
-        first_limit_only=True,
-        exclude_st=True,
-        limit_shapes={"morning"},
-        min_total_mv_wan=500000.0,
-    ),
-    "old_cat_position_cap": BacktestProfile(
-        id="old_cat_position_cap",
-        name="老猫对照：买入限额",
-        description="选股条件与老猫战法一致；单只股票买入金额不超过买入前总资产的三分之一。",
-        first_limit_only=True,
-        exclude_st=True,
-        limit_shapes={"morning"},
-        max_position_allocation_fraction=1.0 / 3.0,
     ),
 }
 
@@ -468,6 +441,7 @@ def snapshot_to_pick(
         next_open=next_open,
         future_closes=[bar["close"] for bar in future_bars],
         future_highs=[bar["high"] for bar in future_bars],
+        future_lows=[bar["low"] for bar in future_bars],
         future_opens=[bar["open"] for bar in future_bars],
         future_dates=[bar["trade_date"] for bar in future_bars],
         recent_3day_change_percent=repository.recent_change_percent(conn, snapshot.code, snapshot.trade_date, 3),

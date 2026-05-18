@@ -199,7 +199,7 @@ enum class BacktestStrategy(
     OldCat(
         id = "old_cat",
         title = "老猫战法",
-        description = "只做首板且早上封板，排除 ST 和一字板；涨停日后第 2 个交易日开盘若相对涨停日收盘价涨幅不超过 5% 则买入；分时均线止损，止盈率可设置。"
+        description = "只做首板且早上封板，排除 ST 和一字板；涨停日后第 2 个交易日开盘若相对涨停日收盘价涨幅不超过 5% 则买入；触及分时均线止损线时按止损价卖出，止盈率可设置。"
     )
 }
 
@@ -346,7 +346,7 @@ object BacktestEngine {
 
         closes.forEachIndexed { index, close ->
             if (reason.endsWith("持有到期") && close <= stopLossPrice) {
-                sellPrice = close
+                sellPrice = stopLossPrice
                 sellIndex = index
                 reason = "${strategy.title}：分时均价止损"
             }

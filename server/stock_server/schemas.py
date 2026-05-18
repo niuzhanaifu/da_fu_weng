@@ -78,6 +78,7 @@ class StockPickOut(BaseModel):
     next_open: Optional[float]
     future_closes: List[float]
     future_highs: List[float] = Field(default_factory=list)
+    future_lows: List[float] = Field(default_factory=list)
     future_opens: List[float] = Field(default_factory=list)
     future_dates: List[str] = Field(default_factory=list)
     recent_3day_change_percent: float = 0.0

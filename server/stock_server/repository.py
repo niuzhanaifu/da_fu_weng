@@ -201,7 +201,7 @@ def future_bars(
 ) -> list[sqlite3.Row]:
     return conn.execute(
         """
-        SELECT trade_date, open, high, close
+        SELECT trade_date, open, high, low, close
         FROM daily_quotes
         WHERE code = ?
           AND trade_date > ?
@@ -517,6 +517,7 @@ def row_to_pick(conn: sqlite3.Connection, row: sqlite3.Row) -> StockPickOut:
         next_open=row["next_open"],
         future_closes=json.loads(row["future_closes_json"]),
         future_highs=[],
+        future_lows=[],
         future_opens=[],
         future_dates=[],
         recent_3day_change_percent=0.0,
