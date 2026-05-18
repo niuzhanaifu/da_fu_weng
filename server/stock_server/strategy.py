@@ -82,7 +82,7 @@ def is_one_word_limit_up(quote: DailyQuoteIn) -> bool:
 
 def matches_indicators(quote: DailyQuoteIn, indicator_ids: set[str]) -> bool:
     for indicator_id in indicator_ids:
-        if indicator_id == "volume" and quote.volume_ratio < 1.8:
+        if indicator_id == "volume" and 0.0 < quote.volume_ratio < 1.8:
             return False
         if indicator_id == "seal" and 0.0 < quote.sealed_amount_wan < 5000.0:
             return False

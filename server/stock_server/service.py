@@ -58,10 +58,19 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
     "old_cat": BacktestProfile(
         id="old_cat",
         name="老猫战法",
-        description="首板且早上封板、非 ST、非一字板；涨停日后第 2 个交易日开盘涨幅不超过 5% 买入；止盈率可设置，触及分时均线止损线时按止损价卖出。",
+        description="首板且早上封板、非 ST、非一字板；涨停日后第 2 个交易日开盘涨幅不超过 5% 买入；止盈率可设置，触及分时均线止损线时按收盘价卖出。",
         first_limit_only=True,
         exclude_st=True,
         limit_shapes={"morning"},
+    ),
+    "old_cat_timely_stop_loss": BacktestProfile(
+        id="old_cat_timely_stop_loss",
+        name="老猫对照：止损价卖出",
+        description="选股和买入条件与老猫战法一致；触及分时均线止损线时按止损价卖出。",
+        first_limit_only=True,
+        exclude_st=True,
+        limit_shapes={"morning"},
+        engine_strategy_id="old_cat_timely_stop_loss",
     ),
     "old_cat_stop_loss_rank": BacktestProfile(
         id="old_cat_stop_loss_rank",
