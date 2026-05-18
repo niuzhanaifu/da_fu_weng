@@ -158,7 +158,7 @@ install_daily_sync_cron() {
 
   local marker_start="# dafu-weng daily-sync start"
   local marker_end="# dafu-weng daily-sync end"
-  local cron_line="0 17 * * 1-5 cd ${APP_DIR} && . .venv/bin/activate && set -a && . .env && set +a && python -m stock_server.jobs sync-tushare --start-date \$(date +\\%F) --end-date \$(date +\\%F) && python -m stock_server.jobs run-daily-selection --date \$(date +\\%F) >> logs/cron.log 2>&1"
+  local cron_line="0 17 * * 1-5 cd ${APP_DIR} && { echo \"[\$(date '+\\%F \\%T \\%Z')] daily sync start\"; . .venv/bin/activate && set -a && . .env && set +a && python -m stock_server.jobs sync-tushare --start-date \$(date +\\%F) --end-date \$(date +\\%F) && python -m stock_server.jobs run-daily-selection --date \$(date +\\%F); echo \"[\$(date '+\\%F \\%T \\%Z')] daily sync finished status=\$?\"; } >> logs/cron.log 2>&1"
   local current_cron
 
   current_cron="$(mktemp)"
