@@ -14,6 +14,7 @@ from .schemas import (
     BacktestRequest,
     BacktestResultOut,
     DailyGroupOut,
+    DailyQuoteIn,
     MarketBoard,
     SelectionRunOut,
     StockPickOut,
@@ -31,6 +32,9 @@ from .tushare_provider import TushareError, fetch_daily_quotes_range, fetch_mark
 DEFAULT_INDICATORS = ["volume", "seal", "close"]
 FULL_DAILY_QUOTE_MIN_COUNT = 1000
 DEFAULT_SYNC_DAYS = 92
+B1_MIN_TOTAL_MV_WAN = 500000.0
+B1_MIN_HISTORY_DAYS = 114
+B1_LOOKBACK_DAYS = 180
 
 
 @dataclass(frozen=True)
@@ -45,6 +49,8 @@ class BacktestProfile:
     max_position_allocation_fraction: float | None = None
     engine_strategy_id: str = "old_cat"
     rank_mode: str = RANK_MODE_RECENT_5DAY_CHANGE
+    selector: str = "limit_up"
+    lookback_days: int = 0
 
 
 @dataclass(frozen=True)
@@ -81,13 +87,24 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         limit_shapes={"morning"},
         rank_mode=RANK_MODE_STOP_LOSS_LOSS,
     ),
+    "b1": BacktestProfile(
+        id="b1",
+        name="B1 战法",
+        description="通达信 B1 选股：J<15 且收盘价站上知行多空线；排除 ST、市值小于 50 亿和非缩量标的；买卖规则沿用老猫战法，并按趋势线止损率排序。",
+        first_limit_only=False,
+        exclude_st=True,
+        min_total_mv_wan=B1_MIN_TOTAL_MV_WAN,
+        rank_mode=RANK_MODE_STOP_LOSS_LOSS,
+        selector="b1",
+        lookback_days=B1_LOOKBACK_DAYS,
+    ),
 }
 
 SELECTION_PROFILES: dict[str, SelectionProfile] = {
     "old_cat_buy": SelectionProfile(
         id="old_cat_buy",
         name="老猫买入",
-        description="回看上一交易日首板早上封板、非 ST、非一字板候选，按老猫买入条件筛选。",
+        description="T+1 收盘后回看上一交易日首板早上封板、非 ST、非一字板候选，按 T+1 涨幅筛出待观察标的。",
     ),
     "limit_up_first": SelectionProfile(
         id="limit_up_first",
@@ -205,7 +222,7 @@ def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> Ba
     profile = BACKTEST_PROFILES.get(request.strategy_id)
     if profile is None:
         raise ValueError(f"Unsupported backtest strategy: {request.strategy_id}")
-    ensure_quotes_for_backtest(conn, request.start_date, request.end_date)
+    ensure_quotes_for_backtest(conn, request.start_date, request.end_date, profile.lookback_days)
     picks = build_backtest_picks(
         conn,
         request.start_date,
@@ -229,7 +246,8 @@ def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> Ba
 
 
 def run_backtest_experiment(conn: sqlite3.Connection, request: BacktestRequest) -> BacktestExperimentOut:
-    ensure_quotes_for_backtest(conn, request.start_date, request.end_date)
+    max_lookback_days = max((profile.lookback_days for profile in BACKTEST_PROFILES.values()), default=0)
+    ensure_quotes_for_backtest(conn, request.start_date, request.end_date, max_lookback_days)
     items: list[BacktestExperimentItemOut] = []
     for profile in BACKTEST_PROFILES.values():
         picks = build_backtest_picks(
@@ -340,13 +358,19 @@ def ensure_quotes_for_backtest(
     conn: sqlite3.Connection,
     start_date: str | None,
     end_date: str | None,
+    lookback_days: int = 0,
 ) -> None:
     selected_end = end_date or repository.latest_quote_date(conn)
     if not selected_end:
         return
-    start = start_date or date_days_before(selected_end, DEFAULT_SYNC_DAYS)
+    base_start = start_date or date_days_before(selected_end, DEFAULT_SYNC_DAYS)
+    start = date_days_before(base_start, lookback_days) if lookback_days > 0 else base_start
     dates = repository.quote_dates_between(conn, start, selected_end)
-    if dates and repository.count_quotes(conn, dates[-1]) >= FULL_DAILY_QUOTE_MIN_COUNT:
+    if (
+        dates
+        and repository.count_quotes(conn, dates[-1]) >= FULL_DAILY_QUOTE_MIN_COUNT
+        and (lookback_days <= 0 or len(dates) >= B1_MIN_HISTORY_DAYS)
+    ):
         return
     try:
         sync_tushare_quotes(conn, start, selected_end)
@@ -364,6 +388,9 @@ def build_backtest_picks(
     profile: BacktestProfile | None = None,
     allow_below_market_ma25: bool = True,
 ) -> list[StockPickOut]:
+    if profile is not None and profile.selector == "b1":
+        return build_b1_backtest_picks(conn, start_date, end_date, holding_days, board, profile)
+
     picks: list[StockPickOut] = []
     for trade_date in repository.quote_dates_between(conn, start_date, end_date):
         if not allow_below_market_ma25 and not market_above_ma25(conn, trade_date):
@@ -375,6 +402,178 @@ def build_backtest_picks(
             snapshots = apply_backtest_profile(conn, snapshots, profile)
         picks.extend(snapshot_to_pick(conn, snapshot, holding_days) for snapshot in snapshots)
     return picks
+
+
+def build_b1_backtest_picks(
+    conn: sqlite3.Connection,
+    start_date: str | None,
+    end_date: str | None,
+    holding_days: int,
+    board: str | None,
+    profile: BacktestProfile,
+) -> list[StockPickOut]:
+    quotes_by_code: dict[str, list[DailyQuoteIn]] = {}
+    for trade_date in repository.quote_dates_on_or_before(conn, end_date):
+        for quote in repository.load_quotes(conn, trade_date):
+            if board and quote.board.value != board:
+                continue
+            quotes_by_code.setdefault(quote.code, []).append(quote)
+
+    snapshots: list[PickSnapshot] = []
+    for quotes in quotes_by_code.values():
+        snapshots.extend(b1_snapshots_for_code(quotes, start_date, end_date, profile))
+
+    snapshots.sort(key=lambda item: (item.trade_date, item.board.value, item.code))
+    return [snapshot_to_pick(conn, snapshot, holding_days) for snapshot in snapshots]
+
+
+def b1_snapshots_for_code(
+    quotes: Sequence[DailyQuoteIn],
+    start_date: str | None,
+    end_date: str | None,
+    profile: BacktestProfile,
+) -> list[PickSnapshot]:
+    sorted_quotes = sorted(quotes, key=lambda item: item.trade_date)
+    closes: list[float] = []
+    highs: list[float] = []
+    lows: list[float] = []
+    ema10: float | None = None
+    zxdq: float | None = None
+    k_value: float | None = None
+    d_value: float | None = None
+    previous_volume: int | None = None
+    result: list[PickSnapshot] = []
+
+    for quote in sorted_quotes:
+        closes.append(quote.close)
+        highs.append(quote.high)
+        lows.append(quote.low)
+
+        ema10 = ema(quote.close, ema10, 10)
+        zxdq = ema(ema10, zxdq, 10)
+
+        rsv = b1_rsv(closes, highs, lows, 9)
+        if rsv is not None:
+            k_value = tdx_sma(rsv, k_value, 3, 1)
+            d_value = tdx_sma(k_value, d_value, 3, 1)
+
+        current_volume = quote_volume(quote)
+        if (
+            in_date_range(quote.trade_date, start_date, end_date)
+            and len(closes) >= B1_MIN_HISTORY_DAYS
+            and k_value is not None
+            and d_value is not None
+            and zxdq is not None
+            and matches_b1_conditions(quote, closes, zxdq, k_value, d_value, previous_volume, current_volume, profile)
+        ):
+            zxdkx = b1_zxdkx(closes)
+            if zxdkx is not None:
+                result.append(b1_snapshot(quote, zxdq, zxdkx))
+
+        previous_volume = current_volume
+
+    return result
+
+
+def matches_b1_conditions(
+    quote: DailyQuoteIn,
+    closes: Sequence[float],
+    zxdq: float,
+    k_value: float,
+    d_value: float,
+    previous_volume: int | None,
+    current_volume: int,
+    profile: BacktestProfile,
+) -> bool:
+    if quote.board not in (MarketBoard.main, MarketBoard.chinext):
+        return False
+    if profile.exclude_st and is_st_stock(quote.name):
+        return False
+    if profile.min_total_mv_wan is not None and quote.total_mv_wan < profile.min_total_mv_wan:
+        return False
+    zxdkx = b1_zxdkx(closes)
+    if zxdkx is None:
+        return False
+    j_value = 3.0 * k_value - 2.0 * d_value
+    return j_value < 15.0 and quote.close > zxdkx and is_shrinking_volume(quote, previous_volume, current_volume)
+
+
+def b1_snapshot(quote: DailyQuoteIn, zxdq: float, zxdkx: float) -> PickSnapshot:
+    return PickSnapshot(
+        trade_date=quote.trade_date,
+        code=quote.code,
+        name=quote.name,
+        board=quote.board,
+        concept=quote.concept,
+        close=quote.close,
+        change_percent=(quote.close - quote.previous_close) / quote.previous_close * 100.0 if quote.previous_close > 0 else 0.0,
+        volume_ratio=quote.volume_ratio,
+        turnover_rate=quote.turnover_rate,
+        total_mv_wan=quote.total_mv_wan,
+        sealed_amount_wan=quote.sealed_amount_wan,
+        stop_loss_price=b1_stop_loss_price(quote.close, zxdq, zxdkx),
+        limit_shape="b1",
+        limit_shape_label="B1选股",
+        next_open=quote.next_open,
+        future_closes=quote.future_closes,
+    )
+
+
+def b1_rsv(closes: Sequence[float], highs: Sequence[float], lows: Sequence[float], n: int) -> float | None:
+    if len(closes) < n:
+        return None
+    highest = max(highs[-n:])
+    lowest = min(lows[-n:])
+    rng = highest - lowest
+    if rng == 0:
+        return 50.0
+    return (closes[-1] - lowest) / rng * 100.0
+
+
+def b1_zxdkx(closes: Sequence[float]) -> float | None:
+    windows = [14, 28, 57, B1_MIN_HISTORY_DAYS]
+    if len(closes) < max(windows):
+        return None
+    return sum(simple_ma(closes, window) for window in windows) / len(windows)
+
+
+def simple_ma(values: Sequence[float], window: int) -> float:
+    return sum(values[-window:]) / window
+
+
+def ema(value: float, previous: float | None, period: int) -> float:
+    if previous is None:
+        return value
+    alpha = 2.0 / (period + 1.0)
+    return value * alpha + previous * (1.0 - alpha)
+
+
+def tdx_sma(value: float, previous: float | None, period: int, weight: int) -> float:
+    if previous is None:
+        return value
+    return (weight * value + (period - weight) * previous) / period
+
+
+def quote_volume(quote: DailyQuoteIn) -> int:
+    return sum(max(0, trade.volume) for trade in quote.minute_trades)
+
+
+def is_shrinking_volume(quote: DailyQuoteIn, previous_volume: int | None, current_volume: int) -> bool:
+    if previous_volume is not None and previous_volume > 0 and current_volume > 0:
+        return current_volume < previous_volume
+    return 0.0 < quote.volume_ratio < 1.0
+
+
+def b1_stop_loss_price(close: float, zxdq: float, zxdkx: float) -> float:
+    valid_lines = [line for line in (zxdq, zxdkx) if 0.0 < line < close]
+    if valid_lines:
+        return max(valid_lines)
+    fallback_lines = [line for line in (zxdq, zxdkx) if line > 0.0]
+    return min(fallback_lines) if fallback_lines else close
+
+
+def in_date_range(trade_date: str, start_date: str | None, end_date: str | None) -> bool:
+    return (start_date is None or trade_date >= start_date) and (end_date is None or trade_date <= end_date)
 
 
 def apply_backtest_profile(
@@ -409,12 +608,12 @@ def is_st_stock(name: str) -> bool:
 
 
 def is_old_cat_buy_candidate(pick: StockPickOut, decision_date: str) -> bool:
-    if len(pick.future_dates) < 2 or len(pick.future_opens) < 2:
+    if len(pick.future_dates) < 1 or len(pick.future_closes) < 1:
         return False
     if pick.future_dates[0] != decision_date:
         return False
-    buy_price = pick.future_opens[1]
-    return buy_price > 0 and buy_price <= pick.close * 1.05
+    decision_close = pick.future_closes[0]
+    return decision_close > 0 and decision_close <= pick.close * 1.05
 
 
 def market_above_ma25(conn: sqlite3.Connection, trade_date: str) -> bool:

@@ -26,7 +26,8 @@ import java.net.URL
 object MarketApiClient {
     private const val BASE_URL = "http://14.103.183.47:8000"
 
-    suspend fun runOldCatBacktest(
+    suspend fun runBacktest(
+        strategyId: String,
         startDate: String?,
         endDate: String?,
         holdingDays: Int,
@@ -36,7 +37,7 @@ object MarketApiClient {
         maxPositionsPerDay: Int = 3
     ): BacktestResult = withContext(Dispatchers.IO) {
         val payload = JSONObject().apply {
-            put("strategy_id", "old_cat")
+            put("strategy_id", strategyId)
             put("holding_days", holdingDays)
             put("max_positions_per_day", maxPositionsPerDay)
             board?.let { put("board", if (it == MarketBoard.ChiNext) "chinext" else "main") }

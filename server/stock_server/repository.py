@@ -171,6 +171,19 @@ def quote_dates_between(
     return [row["trade_date"] for row in rows]
 
 
+def quote_dates_on_or_before(conn: sqlite3.Connection, end_date: str | None) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT DISTINCT trade_date
+        FROM daily_quotes
+        WHERE (? IS NULL OR trade_date <= ?)
+        ORDER BY trade_date ASC
+        """,
+        (end_date, end_date),
+    ).fetchall()
+    return [row["trade_date"] for row in rows]
+
+
 def future_prices(
     conn: sqlite3.Connection,
     code: str,

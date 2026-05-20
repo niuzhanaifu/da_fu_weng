@@ -577,7 +577,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
     var takeProfitText by remember { mutableStateOf("10") }
     var allowBelowMarketMa25 by remember { mutableStateOf(true) }
     var boardFilter by remember { mutableStateOf(PickBoardFilter.All) }
-    val selectedStrategy = BacktestStrategy.OldCat
+    var selectedStrategy by remember { mutableStateOf(BacktestStrategy.OldCat) }
     var startDate by remember { mutableStateOf(dateMonthsBefore(todayDateString(), 3)) }
     var endDate by remember { mutableStateOf(todayDateString()) }
     var runRequest by remember { mutableIntStateOf(0) }
@@ -608,7 +608,8 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                 PickBoardFilter.Main -> MarketBoard.Main
                 PickBoardFilter.ChiNext -> MarketBoard.ChiNext
             }
-            val currentResult = MarketApiClient.runOldCatBacktest(
+            val currentResult = MarketApiClient.runBacktest(
+                strategyId = selectedStrategy.id,
                 startDate = normalizedStart.ifEmpty { null },
                 endDate = normalizedEnd.ifEmpty { null },
                 holdingDays = holdingDays,
@@ -700,7 +701,8 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
         }
         item {
             StrategyControls(
-                selectedStrategy = selectedStrategy
+                selectedStrategy = selectedStrategy,
+                onSelectedStrategy = { selectedStrategy = it }
             )
         }
         item {
@@ -762,6 +764,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                     startDate = entry.startDate
                     endDate = entry.endDate
                     holdingDays = entry.holdingDays
+                    selectedStrategy = BacktestStrategy.values().firstOrNull { it.id == entry.strategyId } ?: BacktestStrategy.OldCat
                     boardFilter = when (entry.board) {
                         MarketBoard.Main -> PickBoardFilter.Main
                         MarketBoard.ChiNext -> PickBoardFilter.ChiNext
@@ -1376,7 +1379,8 @@ private fun DateRangeControls(
 
 @Composable
 private fun StrategyControls(
-    selectedStrategy: BacktestStrategy
+    selectedStrategy: BacktestStrategy,
+    onSelectedStrategy: (BacktestStrategy) -> Unit
 ) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Panel),
@@ -1384,21 +1388,28 @@ private fun StrategyControls(
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("回测战法", color = Ink, fontWeight = FontWeight.Bold)
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth(),
-                color = Color(0xFFF8FAFC),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            BacktestStrategy.values().forEach { strategy ->
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelectedStrategy(strategy) },
+                    color = if (selectedStrategy == strategy) Color(0xFFEFF6FF) else Color(0xFFF8FAFC),
+                    shape = RoundedCornerShape(8.dp)
                 ) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(selectedStrategy.title, color = Ink, fontWeight = FontWeight.Bold)
-                        Text(selectedStrategy.description, color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                strategy.title,
+                                color = if (selectedStrategy == strategy) ChiNextBlue else Ink,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(strategy.description, color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+                        }
+                        Text(if (selectedStrategy == strategy) "已选择" else "选择", color = Muted, fontSize = 12.sp)
                     }
-                    Text("已选择", color = Muted, fontSize = 12.sp)
                 }
             }
         }
