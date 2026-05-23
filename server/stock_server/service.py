@@ -35,6 +35,11 @@ DEFAULT_SYNC_DAYS = 92
 B1_MIN_TOTAL_MV_WAN = 500000.0
 B1_MIN_HISTORY_DAYS = 114
 B1_LOOKBACK_DAYS = 180
+B1_J_THRESHOLD = 13.0
+B1_LINE_PROXIMITY_MAX = 0.035
+B1_VOLUME_PREVIOUS_RATIO_MAX = 0.85
+B1_VOLUME_AVG_RATIO_MAX = 0.75
+B1_N_SHAPE_LOOKBACK_DAYS = 60
 
 
 @dataclass(frozen=True)
@@ -90,7 +95,7 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
     "b1": BacktestProfile(
         id="b1",
         name="B1 战法",
-        description="通达信 B1 选股：J<15 且收盘价站上知行多空线；排除 ST、市值小于 50 亿和非缩量标的；买卖规则沿用老猫战法，并按趋势线止损率排序。",
+        description="B1 选股：J<13，收盘价贴近知行短期线或多空线，当天相对前几日明显缩量，且日线呈 N 型上涨结构；排除 ST 和市值小于 50 亿标的；买卖规则沿用老猫战法，并按趋势线止损率排序。",
         first_limit_only=False,
         exclude_st=True,
         min_total_mv_wan=B1_MIN_TOTAL_MV_WAN,
@@ -437,11 +442,11 @@ def b1_snapshots_for_code(
     closes: list[float] = []
     highs: list[float] = []
     lows: list[float] = []
+    volumes: list[int] = []
     ema10: float | None = None
     zxdq: float | None = None
     k_value: float | None = None
     d_value: float | None = None
-    previous_volume: int | None = None
     result: list[PickSnapshot] = []
 
     for quote in sorted_quotes:
@@ -458,19 +463,20 @@ def b1_snapshots_for_code(
             d_value = tdx_sma(k_value, d_value, 3, 1)
 
         current_volume = quote_volume(quote)
+        recent_volumes = volumes[-5:]
         if (
             in_date_range(quote.trade_date, start_date, end_date)
             and len(closes) >= B1_MIN_HISTORY_DAYS
             and k_value is not None
             and d_value is not None
             and zxdq is not None
-            and matches_b1_conditions(quote, closes, zxdq, k_value, d_value, previous_volume, current_volume, profile)
+            and matches_b1_conditions(quote, closes, zxdq, k_value, d_value, recent_volumes, current_volume, profile)
         ):
             zxdkx = b1_zxdkx(closes)
             if zxdkx is not None:
                 result.append(b1_snapshot(quote, zxdq, zxdkx))
 
-        previous_volume = current_volume
+        volumes.append(current_volume)
 
     return result
 
@@ -481,7 +487,7 @@ def matches_b1_conditions(
     zxdq: float,
     k_value: float,
     d_value: float,
-    previous_volume: int | None,
+    recent_volumes: Sequence[int],
     current_volume: int,
     profile: BacktestProfile,
 ) -> bool:
@@ -495,7 +501,12 @@ def matches_b1_conditions(
     if zxdkx is None:
         return False
     j_value = 3.0 * k_value - 2.0 * d_value
-    return j_value < 15.0 and quote.close > zxdkx and is_shrinking_volume(quote, previous_volume, current_volume)
+    return (
+        j_value < B1_J_THRESHOLD
+        and is_price_near_b1_line(quote.close, zxdq, zxdkx)
+        and is_significant_shrinking_volume(quote, recent_volumes, current_volume)
+        and has_n_shape_uptrend(closes)
+    )
 
 
 def b1_snapshot(quote: DailyQuoteIn, zxdq: float, zxdkx: float) -> PickSnapshot:
@@ -558,10 +569,48 @@ def quote_volume(quote: DailyQuoteIn) -> int:
     return sum(max(0, trade.volume) for trade in quote.minute_trades)
 
 
-def is_shrinking_volume(quote: DailyQuoteIn, previous_volume: int | None, current_volume: int) -> bool:
-    if previous_volume is not None and previous_volume > 0 and current_volume > 0:
-        return current_volume < previous_volume
-    return 0.0 < quote.volume_ratio < 1.0
+def is_price_near_b1_line(close: float, zxdq: float, zxdkx: float) -> bool:
+    return any(is_price_near_support_line(close, line) for line in (zxdq, zxdkx))
+
+
+def is_price_near_support_line(close: float, line: float) -> bool:
+    if close <= 0.0 or line <= 0.0:
+        return False
+    return line <= close <= line * (1.0 + B1_LINE_PROXIMITY_MAX)
+
+
+def is_significant_shrinking_volume(quote: DailyQuoteIn, recent_volumes: Sequence[int], current_volume: int) -> bool:
+    valid_volumes = [volume for volume in recent_volumes if volume > 0]
+    if current_volume > 0 and valid_volumes:
+        previous_volume = valid_volumes[-1]
+        if current_volume > previous_volume * B1_VOLUME_PREVIOUS_RATIO_MAX:
+            return False
+        if len(valid_volumes) >= 3:
+            average_volume = sum(valid_volumes) / len(valid_volumes)
+            return current_volume <= average_volume * B1_VOLUME_AVG_RATIO_MAX
+        return True
+    return 0.0 < quote.volume_ratio <= B1_VOLUME_AVG_RATIO_MAX
+
+
+def has_n_shape_uptrend(closes: Sequence[float]) -> bool:
+    if len(closes) < B1_N_SHAPE_LOOKBACK_DAYS:
+        return False
+    recent_closes = closes[-20:]
+    prior_closes = closes[-B1_N_SHAPE_LOOKBACK_DAYS:-20]
+    if not recent_closes or not prior_closes:
+        return False
+
+    current_ma20 = simple_ma(closes, 20)
+    current_ma60 = simple_ma(closes, B1_N_SHAPE_LOOKBACK_DAYS)
+    previous_ma60 = simple_ma(closes[:-20], B1_N_SHAPE_LOOKBACK_DAYS)
+    if current_ma20 <= current_ma60 or current_ma60 <= previous_ma60:
+        return False
+
+    prior_low = min(prior_closes)
+    prior_high = max(prior_closes)
+    recent_low = min(recent_closes)
+    recent_high = max(recent_closes)
+    return recent_low >= prior_low * 1.03 and recent_high >= prior_high * 0.98
 
 
 def b1_stop_loss_price(close: float, zxdq: float, zxdkx: float) -> float:

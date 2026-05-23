@@ -14,36 +14,7 @@ class B1BacktestSelectionTest(unittest.TestCase):
         create_schema(conn)
         dates = date_strings("2024-01-01", 122)
         candidate_date = dates[119]
-        quotes = []
-        previous_close = 8.0
-        for index, trade_date in enumerate(dates):
-            close = 8.0
-            high = 8.1
-            low = 7.9
-            volume = 2000
-            if 111 <= index <= 119:
-                close = 8.5
-                high = 12.0
-                low = 8.0
-            if index == 119:
-                volume = 1000
-            if index >= 120:
-                close = 8.8
-                high = 9.0
-                low = 8.6
-            quotes.append(
-                quote(
-                    trade_date=trade_date,
-                    previous_close=previous_close,
-                    close=close,
-                    high=high,
-                    low=low,
-                    volume=volume,
-                    total_mv_wan=600000.0,
-                )
-            )
-            previous_close = close
-        repository.upsert_daily_quotes(conn, quotes)
+        repository.upsert_daily_quotes(conn, b1_n_shape_quotes(dates, total_mv_wan=600000.0))
 
         picks = build_backtest_picks(
             conn,
@@ -64,25 +35,50 @@ class B1BacktestSelectionTest(unittest.TestCase):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         create_schema(conn)
-        dates = date_strings("2024-01-01", 120)
-        candidate_date = dates[-1]
-        previous_close = 8.0
-        quotes = []
-        for index, trade_date in enumerate(dates):
-            close = 8.5 if index >= 111 else 8.0
-            quotes.append(
-                quote(
-                    trade_date=trade_date,
-                    previous_close=previous_close,
-                    close=close,
-                    high=12.0 if index >= 111 else 8.1,
-                    low=8.0 if index >= 111 else 7.9,
-                    volume=1000 if index == 119 else 2000,
-                    total_mv_wan=499999.0,
-                )
-            )
-            previous_close = close
-        repository.upsert_daily_quotes(conn, quotes)
+        dates = date_strings("2024-01-01", 122)
+        candidate_date = dates[119]
+        repository.upsert_daily_quotes(conn, b1_n_shape_quotes(dates, total_mv_wan=499999.0))
+
+        picks = build_backtest_picks(
+            conn,
+            start_date=candidate_date,
+            end_date=candidate_date,
+            indicator_ids=[],
+            holding_days=3,
+            profile=BACKTEST_PROFILES["b1"],
+        )
+
+        self.assertEqual(picks, [])
+
+    def test_b1_requires_significant_volume_shrink(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        create_schema(conn)
+        dates = date_strings("2024-01-01", 122)
+        candidate_date = dates[119]
+        repository.upsert_daily_quotes(
+            conn,
+            b1_n_shape_quotes(dates, total_mv_wan=600000.0, candidate_volume=1650),
+        )
+
+        picks = build_backtest_picks(
+            conn,
+            start_date=candidate_date,
+            end_date=candidate_date,
+            indicator_ids=[],
+            holding_days=3,
+            profile=BACKTEST_PROFILES["b1"],
+        )
+
+        self.assertEqual(picks, [])
+
+    def test_b1_requires_n_shape_uptrend(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        create_schema(conn)
+        dates = date_strings("2024-01-01", 122)
+        candidate_date = dates[119]
+        repository.upsert_daily_quotes(conn, flat_quotes(dates, total_mv_wan=600000.0))
 
         picks = build_backtest_picks(
             conn,
@@ -160,6 +156,74 @@ def quote(
         sealed_amount_wan=0.0,
         minute_trades=[MinuteTrade(minute="daily", price=close, volume=volume)],
     )
+
+
+def b1_n_shape_quotes(
+    dates: list[str],
+    total_mv_wan: float,
+    candidate_volume: int = 900,
+) -> list[DailyQuoteIn]:
+    quotes = []
+    previous_close = 7.0
+    for index, trade_date in enumerate(dates):
+        if index < 60:
+            close = 7.0 + index * 0.01
+        elif index < 85:
+            close = 7.6 + (index - 60) * 0.07
+        elif index < 105:
+            close = 9.3 - (index - 85) * 0.04
+        elif index < 116:
+            close = 8.5 + (index - 105) * 0.08
+        elif index < 120:
+            close = 8.75 - (index - 116) * 0.04
+        else:
+            close = 8.8 + (index - 120) * 0.05
+
+        high = close + 0.12
+        low = close - 0.12
+        if 111 <= index <= 119:
+            high = max(high, 9.7)
+            low = min(low, 8.45)
+        volume = candidate_volume if index == 119 else 1800
+        quotes.append(
+            quote(
+                trade_date=trade_date,
+                previous_close=previous_close,
+                close=close,
+                high=high,
+                low=low,
+                volume=volume,
+                total_mv_wan=total_mv_wan,
+            )
+        )
+        previous_close = close
+    return quotes
+
+
+def flat_quotes(dates: list[str], total_mv_wan: float) -> list[DailyQuoteIn]:
+    quotes = []
+    previous_close = 8.0
+    for index, trade_date in enumerate(dates):
+        close = 8.0
+        high = 8.1
+        low = 7.9
+        if 111 <= index <= 119:
+            close = 8.2
+            high = 9.7
+            low = 8.0
+        quotes.append(
+            quote(
+                trade_date=trade_date,
+                previous_close=previous_close,
+                close=close,
+                high=high,
+                low=low,
+                volume=900 if index == 119 else 1800,
+                total_mv_wan=total_mv_wan,
+            )
+        )
+        previous_close = close
+    return quotes
 
 
 def date_strings(start_date: str, count: int) -> list[str]:

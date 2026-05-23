@@ -204,7 +204,7 @@ enum class BacktestStrategy(
     B1(
         id = "b1",
         title = "B1 战法",
-        description = "J<15 且收盘价站上知行多空线；排除 ST、市值小于 50 亿和非缩量标的；买卖规则沿用老猫战法，并按趋势线止损率排序。"
+        description = "J<13，收盘价贴近知行短期线或多空线，明显缩量且日线呈 N 型上涨结构；排除 ST 和市值小于 50 亿标的。"
     )
 }
 
