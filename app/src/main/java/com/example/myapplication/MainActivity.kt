@@ -1209,8 +1209,8 @@ private fun StockPickCard(
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     QuoteCell("最新收盘", latest.asPrice(), RiseRed, Modifier.weight(1f))
                     QuoteCell("止损率", stopLossRateLabel, stopLossRateColor, Modifier.weight(1f))
-                    QuoteCell("行情日期", pick.latestTradeDate.orEmpty().ifBlank { "--" }, Muted, Modifier.weight(1f))
                 }
+                Text("行情日期 ${pick.latestTradeDate.orEmpty().ifBlank { "--" }}", color = Muted, fontSize = 12.sp)
                 if (pick.isBelowStopLoss()) {
                     Text("最新收盘已低于止损价", color = FallGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
