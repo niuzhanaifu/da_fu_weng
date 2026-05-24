@@ -63,6 +63,56 @@ class OldCatSelectionTest(unittest.TestCase):
         self.assertEqual(group.trade_date, "2024-05-13")
         self.assertEqual(group.picks, [])
 
+    def test_old_cat_selection_sorts_like_backtest_by_recent_5day_change(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        create_schema(conn)
+        repository.upsert_daily_quotes(
+            conn,
+            [
+                quote("2024-05-03", previous_close=8.0, open_price=8.0, high=8.1, low=7.9, close=8.0, code="600000"),
+                quote("2024-05-06", previous_close=8.0, open_price=8.2, high=8.4, low=8.1, close=8.3, code="600000"),
+                quote("2024-05-07", previous_close=8.3, open_price=8.5, high=8.7, low=8.4, close=8.6, code="600000"),
+                quote("2024-05-08", previous_close=8.6, open_price=9.0, high=9.2, low=8.9, close=9.1, code="600000"),
+                quote("2024-05-09", previous_close=9.1, open_price=10.0, high=10.2, low=9.9, close=10.0, code="600000"),
+                quote(
+                    "2024-05-10",
+                    previous_close=10.0,
+                    open_price=10.2,
+                    high=11.0,
+                    low=10.2,
+                    close=11.0,
+                    code="600000",
+                    sealed_amount_wan=9000.0,
+                    minute_trades=[MinuteTrade(minute="10:00", price=11.0, volume=1000)],
+                ),
+                quote("2024-05-13", previous_close=11.0, open_price=11.2, high=11.4, low=11.0, close=11.3, code="600000"),
+
+                quote("2024-05-03", previous_close=10.5, open_price=10.5, high=10.6, low=10.4, close=10.5, code="600001"),
+                quote("2024-05-06", previous_close=10.5, open_price=10.4, high=10.6, low=10.3, close=10.4, code="600001"),
+                quote("2024-05-07", previous_close=10.4, open_price=10.5, high=10.7, low=10.4, close=10.6, code="600001"),
+                quote("2024-05-08", previous_close=10.6, open_price=10.6, high=10.8, low=10.5, close=10.7, code="600001"),
+                quote("2024-05-09", previous_close=10.7, open_price=10.0, high=10.2, low=9.9, close=10.0, code="600001"),
+                quote(
+                    "2024-05-10",
+                    previous_close=10.0,
+                    open_price=10.2,
+                    high=11.0,
+                    low=10.2,
+                    close=11.0,
+                    code="600001",
+                    sealed_amount_wan=6000.0,
+                    minute_trades=[MinuteTrade(minute="10:00", price=11.0, volume=1000)],
+                ),
+                quote("2024-05-13", previous_close=11.0, open_price=11.2, high=11.4, low=11.0, close=11.3, code="600001"),
+            ],
+        )
+
+        group = run_selection_group(conn, None, ["volume", "seal", "close"], "old_cat_buy")
+
+        self.assertEqual([pick.code for pick in group.picks], ["600001", "600000"])
+        self.assertLess(group.picks[0].recent_5day_change_percent, group.picks[1].recent_5day_change_percent)
+
     def test_selection_aligned_backtest_filters_t_plus_one_close_and_buys_t_plus_two_open(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -222,12 +272,15 @@ def quote(
     high: float,
     low: float,
     close: float,
+    code: str = "600000",
+    name: str = "Sample Equity",
+    sealed_amount_wan: float = 6000.0,
     minute_trades: list[MinuteTrade] | None = None,
 ) -> DailyQuoteIn:
     return DailyQuoteIn(
         trade_date=trade_date,
-        code="600000",
-        name="Sample Equity",
+        code=code,
+        name=name,
         board=MarketBoard.main,
         previous_close=previous_close,
         open=open_price,
@@ -237,7 +290,7 @@ def quote(
         volume_ratio=2.0,
         turnover_rate=10.0,
         total_mv_wan=100000.0,
-        sealed_amount_wan=6000.0,
+        sealed_amount_wan=sealed_amount_wan,
         minute_trades=minute_trades or [MinuteTrade(minute="15:00", price=close, volume=1000)],
     )
 

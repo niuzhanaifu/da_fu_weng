@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Sequence
 
 from . import repository
-from .backtest import RANK_MODE_RECENT_5DAY_CHANGE, RANK_MODE_STOP_LOSS_LOSS, run_backtest
+from .backtest import RANK_MODE_RECENT_5DAY_CHANGE, RANK_MODE_STOP_LOSS_LOSS, rank_daily_picks, run_backtest
 from .schemas import (
     BacktestExperimentItemOut,
     BacktestExperimentOut,
@@ -206,11 +206,12 @@ def run_old_cat_selection(
         raise ValueError(f"No previous trading day quotes found before {selected_date}.")
     snapshots = select_limit_up(repository.load_quotes(conn, candidate_date), indicators)
     snapshots = apply_backtest_profile(conn, snapshots, BACKTEST_PROFILES["old_cat"])
-    return [
+    picks = [
         pick
         for pick in (snapshot_to_pick(conn, snapshot, holding_days=3) for snapshot in snapshots)
         if is_old_cat_buy_candidate(pick, selected_date)
     ]
+    return rank_daily_picks(picks)
 
 
 def run_first_limit_selection(

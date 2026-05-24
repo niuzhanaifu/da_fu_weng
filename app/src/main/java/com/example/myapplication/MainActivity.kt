@@ -1179,6 +1179,8 @@ private fun StockPickCard(
     onBuyClick: () -> Unit,
     onClick: () -> Unit
 ) {
+    val stopLossRateLabel = pick.stopLossRateLabel()
+    val stopLossRateColor = if (pick.isBelowStopLoss()) FallGreen else RiseRed
     ElevatedCard(
         modifier = Modifier.clickable(onClick = onClick),
         colors = CardDefaults.elevatedCardColors(containerColor = Panel),
@@ -1204,7 +1206,14 @@ private fun StockPickCard(
                 Text("涨停形态：${pick.limitShapeLabel}", color = Muted, fontSize = 12.sp)
             }
             pick.latestClose?.let { latest ->
-                Text("最新收盘 ${latest.asPrice()} / ${pick.latestTradeDate.orEmpty()}", color = Muted, fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    QuoteCell("最新收盘", latest.asPrice(), RiseRed, Modifier.weight(1f))
+                    QuoteCell("止损率", stopLossRateLabel, stopLossRateColor, Modifier.weight(1f))
+                    QuoteCell("行情日期", pick.latestTradeDate.orEmpty().ifBlank { "--" }, Muted, Modifier.weight(1f))
+                }
+                if (pick.isBelowStopLoss()) {
+                    Text("最新收盘已低于止损价", color = FallGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
             }
             Button(
                 onClick = onBuyClick,
@@ -1215,6 +1224,18 @@ private fun StockPickCard(
             }
         }
     }
+}
+
+private fun StockPick.stopLossRateLabel(): String {
+    val latest = latestClose ?: return "暂无"
+    if (latest <= 0.0 || stopLossPrice <= 0.0) return "暂无"
+    if (latest < stopLossPrice) return "跌破止损"
+    return ((latest - stopLossPrice) / latest * 100.0).asPercent()
+}
+
+private fun StockPick.isBelowStopLoss(): Boolean {
+    val latest = latestClose ?: return false
+    return latest > 0.0 && stopLossPrice > 0.0 && latest < stopLossPrice
 }
 
 @Composable
