@@ -22,6 +22,7 @@ class BacktestStrategy(Protocol):
 class OldCatStrategy:
     id: str = "old_cat"
     sell_stop_loss_at_stop_price: bool = False
+    require_buy_open_within_limit: bool = True
 
     def simulate_trade(self, pick: StockPickOut, holding_days: int, take_profit_percent: float) -> BacktestTradeOut | None:
         if len(pick.future_opens) < 3 or len(pick.future_closes) < 3 or len(pick.future_dates) < 3:
@@ -30,7 +31,7 @@ class OldCatStrategy:
         buy_price = pick.future_opens[1]
         if buy_price is None or buy_price <= 0:
             return None
-        if buy_price > pick.close * 1.05:
+        if self.require_buy_open_within_limit and buy_price > pick.close * 1.05:
             return None
 
         sell_window_end = 2 + max(1, holding_days)
@@ -77,6 +78,10 @@ STRATEGIES: dict[str, BacktestStrategy] = {
     "old_cat_timely_stop_loss": OldCatStrategy(
         id="old_cat_timely_stop_loss",
         sell_stop_loss_at_stop_price=True,
+    ),
+    "old_cat_selection_aligned": OldCatStrategy(
+        id="old_cat_selection_aligned",
+        require_buy_open_within_limit=False,
     ),
 }
 

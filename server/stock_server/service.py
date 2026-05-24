@@ -74,6 +74,16 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         exclude_st=True,
         limit_shapes={"morning"},
     ),
+    "old_cat_selection_aligned": BacktestProfile(
+        id="old_cat_selection_aligned",
+        name="老猫对照：选股口径对齐",
+        description="T 日首板早上封板、非 ST、非一字板；按 T+1 收盘相对 T 日收盘涨幅不超过 5% 过滤；T+2 开盘价买入。",
+        first_limit_only=True,
+        exclude_st=True,
+        limit_shapes={"morning"},
+        engine_strategy_id="old_cat_selection_aligned",
+        selector="old_cat_selection_aligned",
+    ),
     "old_cat_timely_stop_loss": BacktestProfile(
         id="old_cat_timely_stop_loss",
         name="老猫对照：止损价卖出",
@@ -251,10 +261,11 @@ def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> Ba
 
 
 def run_backtest_experiment(conn: sqlite3.Connection, request: BacktestRequest) -> BacktestExperimentOut:
-    max_lookback_days = max((profile.lookback_days for profile in BACKTEST_PROFILES.values()), default=0)
+    experiment_profiles = [profile for profile in BACKTEST_PROFILES.values() if profile.id != "b1"]
+    max_lookback_days = max((profile.lookback_days for profile in experiment_profiles), default=0)
     ensure_quotes_for_backtest(conn, request.start_date, request.end_date, max_lookback_days)
     items: list[BacktestExperimentItemOut] = []
-    for profile in BACKTEST_PROFILES.values():
+    for profile in experiment_profiles:
         picks = build_backtest_picks(
             conn,
             request.start_date,
@@ -395,6 +406,17 @@ def build_backtest_picks(
 ) -> list[StockPickOut]:
     if profile is not None and profile.selector == "b1":
         return build_b1_backtest_picks(conn, start_date, end_date, holding_days, board, profile)
+    if profile is not None and profile.selector == "old_cat_selection_aligned":
+        return build_old_cat_selection_aligned_backtest_picks(
+            conn,
+            start_date,
+            end_date,
+            indicator_ids,
+            holding_days,
+            board,
+            profile,
+            allow_below_market_ma25,
+        )
 
     picks: list[StockPickOut] = []
     for trade_date in repository.quote_dates_between(conn, start_date, end_date):
@@ -406,6 +428,31 @@ def build_backtest_picks(
         if profile is not None:
             snapshots = apply_backtest_profile(conn, snapshots, profile)
         picks.extend(snapshot_to_pick(conn, snapshot, holding_days) for snapshot in snapshots)
+    return picks
+
+
+def build_old_cat_selection_aligned_backtest_picks(
+    conn: sqlite3.Connection,
+    start_date: str | None,
+    end_date: str | None,
+    indicator_ids: Sequence[str],
+    holding_days: int,
+    board: str | None,
+    profile: BacktestProfile,
+    allow_below_market_ma25: bool,
+) -> list[StockPickOut]:
+    picks: list[StockPickOut] = []
+    for trade_date in repository.quote_dates_between(conn, start_date, end_date):
+        if not allow_below_market_ma25 and not market_above_ma25(conn, trade_date):
+            continue
+        snapshots = select_limit_up(repository.load_quotes(conn, trade_date), indicator_ids)
+        if board:
+            snapshots = [snapshot for snapshot in snapshots if snapshot.board.value == board]
+        snapshots = apply_backtest_profile(conn, snapshots, profile)
+        for snapshot in snapshots:
+            pick = snapshot_to_pick(conn, snapshot, holding_days)
+            if is_old_cat_selection_aligned_candidate(pick):
+                picks.append(pick)
     return picks
 
 
@@ -660,6 +707,13 @@ def is_old_cat_buy_candidate(pick: StockPickOut, decision_date: str) -> bool:
     if len(pick.future_dates) < 1 or len(pick.future_closes) < 1:
         return False
     if pick.future_dates[0] != decision_date:
+        return False
+    decision_close = pick.future_closes[0]
+    return decision_close > 0 and decision_close <= pick.close * 1.05
+
+
+def is_old_cat_selection_aligned_candidate(pick: StockPickOut) -> bool:
+    if len(pick.future_closes) < 1:
         return False
     decision_close = pick.future_closes[0]
     return decision_close > 0 and decision_close <= pick.close * 1.05
