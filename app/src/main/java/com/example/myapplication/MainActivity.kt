@@ -1028,20 +1028,39 @@ private fun SellTradeDialog(
 @Composable
 private fun TradingPage() {
     var refreshRequest by remember { mutableIntStateOf(0) }
+    var adviceDate by remember { mutableStateOf(todayDateString()) }
     var tradeBook by remember { mutableStateOf<TradeBook?>(null) }
+    var dailyAdviceGroup by remember { mutableStateOf<DailyPickGroup?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+    var isAdviceLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var adviceErrorMessage by remember { mutableStateOf<String?>(null) }
     var sellingPosition by remember { mutableStateOf<TradePosition?>(null) }
+    var buyingAdvicePick by remember { mutableStateOf<StockPick?>(null) }
 
-    LaunchedEffect(refreshRequest) {
+    LaunchedEffect(refreshRequest, adviceDate) {
         isLoading = true
+        isAdviceLoading = true
         errorMessage = null
+        adviceErrorMessage = null
         try {
             tradeBook = MarketApiClient.fetchTradeBook()
         } catch (error: Exception) {
             errorMessage = error.message ?: "交易记录加载失败"
         } finally {
             isLoading = false
+        }
+        try {
+            dailyAdviceGroup = MarketApiClient.runSelection(
+                tradeDate = adviceDate,
+                strategy = SelectionStrategy.OldCatBuy,
+                indicatorIds = setOf("volume", "seal", "close")
+            )
+        } catch (error: Exception) {
+            dailyAdviceGroup = null
+            adviceErrorMessage = error.message ?: "每日建议加载失败"
+        } finally {
+            isAdviceLoading = false
         }
     }
 
@@ -1051,6 +1070,16 @@ private fun TradingPage() {
             onDismiss = { sellingPosition = null },
             onSaved = {
                 sellingPosition = null
+                refreshRequest += 1
+            }
+        )
+    }
+    buyingAdvicePick?.let { pick ->
+        BuyTradeDialog(
+            pick = pick,
+            onDismiss = { buyingAdvicePick = null },
+            onSaved = {
+                buyingAdvicePick = null
                 refreshRequest += 1
             }
         )
@@ -1073,6 +1102,17 @@ private fun TradingPage() {
         errorMessage?.let { message ->
             item { ErrorState("交易记录加载失败：$message") }
         }
+        item {
+            DailyOperationAdviceCard(
+                tradeBook = tradeBook,
+                adviceGroup = dailyAdviceGroup,
+                isLoading = isAdviceLoading,
+                errorMessage = adviceErrorMessage,
+                selectedDate = adviceDate,
+                onSelectedDateChange = { adviceDate = it },
+                onBuyClick = { buyingAdvicePick = it }
+            )
+        }
         tradeBook?.let { book ->
             item { TradeStatsCards(book) }
             item { Text("当前持仓", color = Ink, fontWeight = FontWeight.Bold) }
@@ -1093,6 +1133,118 @@ private fun TradingPage() {
                 items(book.history) { position ->
                     TradePositionCard(position = position, onSell = null)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DailyOperationAdviceCard(
+    tradeBook: TradeBook?,
+    adviceGroup: DailyPickGroup?,
+    isLoading: Boolean,
+    errorMessage: String?,
+    selectedDate: String,
+    onSelectedDateChange: (String) -> Unit,
+    onBuyClick: (StockPick) -> Unit
+) {
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = Panel),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("每日建议操作", color = Ink, fontWeight = FontWeight.Bold)
+                    Text(
+                        "按老猫买入条件生成，数据以服务端最新收盘行情为准",
+                        color = Muted,
+                        fontSize = 12.sp
+                    )
+                }
+                adviceGroup?.let {
+                    Text(it.date, color = Muted, fontSize = 12.sp)
+                }
+            }
+            CalendarDateSelector(
+                title = "建议日期",
+                value = selectedDate,
+                onSelected = onSelectedDateChange
+            )
+
+            when {
+                isLoading -> {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = ActionBlue)
+                        Text("正在生成建议", color = Muted, fontSize = 12.sp)
+                    }
+                }
+                errorMessage != null -> {
+                    Text("建议加载失败：$errorMessage", color = FallGreen, fontSize = 12.sp)
+                }
+                else -> {
+                    val sellSignals = tradeBook?.openPositions.orEmpty().filter { it.sellSignal }
+                    if (sellSignals.isEmpty() && adviceGroup?.picks.orEmpty().isEmpty()) {
+                        Text("今日暂无建议操作", color = Muted, fontSize = 13.sp)
+                    }
+                    sellSignals.forEach { position ->
+                        DailySellAdviceRow(position)
+                    }
+                    adviceGroup?.picks.orEmpty().forEach { pick ->
+                        DailyBuyAdviceRow(pick = pick, onBuyClick = { onBuyClick(pick) })
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DailySellAdviceRow(position: TradePosition) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("${position.name} ${position.code}", color = Ink, fontWeight = FontWeight.Bold)
+                    Text("最新收盘 ${position.latestClose?.asPrice() ?: "暂无"} / 止损线 ${position.stopLossPrice.asPrice()}", color = Muted, fontSize = 12.sp)
+                }
+                Text("建议卖出", color = FallGreen, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DailyBuyAdviceRow(
+    pick: StockPick,
+    onBuyClick: () -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("${pick.name} ${pick.code}", color = Ink, fontWeight = FontWeight.Bold)
+                    Text("老猫买入候选：T+2 开盘关注", color = Muted, fontSize = 12.sp)
+                }
+                Text("建议关注", color = RiseRed, fontWeight = FontWeight.Bold)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QuoteCell("选股日收盘", pick.close.asPrice(), RiseRed, Modifier.weight(1f))
+                QuoteCell("止损线", pick.stopLossPrice.asPrice(), FallGreen, Modifier.weight(1f))
+                QuoteCell("止损率", pick.stopLossRateLabel(), if (pick.isBelowStopLoss()) FallGreen else RiseRed, Modifier.weight(1f))
+            }
+            Button(
+                onClick = onBuyClick,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ActionButtonColors()
+            ) {
+                Text("记录买入")
             }
         }
     }

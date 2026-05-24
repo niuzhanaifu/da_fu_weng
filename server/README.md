@@ -272,3 +272,4 @@ APP 触发 `/api/v1/backtests/experiments` 时，服务端会同时跑多组互�
 - `old_cat_position_cap`：选股条件与正式老猫战法一致；单只股票买入金额不超过买入前总资产的三分之一。
 
 B1 战法保留单独回测入口，不参与策略对比实验。
+`old_cat_timely_stop_loss` 保留为内部回测策略，不参与策略对比实验。
