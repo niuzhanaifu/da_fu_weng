@@ -102,6 +102,14 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         limit_shapes={"morning"},
         rank_mode=RANK_MODE_STOP_LOSS_LOSS,
     ),
+    "old_cat_afternoon_limit": BacktestProfile(
+        id="old_cat_afternoon_limit",
+        name="老猫对照：下午封板",
+        description="选股和买卖规则与老猫战法一致，但只做首板且下午封板的股票。",
+        first_limit_only=True,
+        exclude_st=True,
+        limit_shapes={"afternoon"},
+    ),
     "b1": BacktestProfile(
         id="b1",
         name="B1 战法",

@@ -209,6 +209,65 @@ class OldCatSelectionTest(unittest.TestCase):
 
         self.assertEqual(picks, [])
 
+    def test_afternoon_limit_backtest_profile_only_keeps_afternoon_seals(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        create_schema(conn)
+        repository.upsert_daily_quotes(
+            conn,
+            [
+                quote("2024-05-09", previous_close=10.0, open_price=10.0, high=10.2, low=9.9, close=10.0, code="600000"),
+                quote("2024-05-09", previous_close=10.0, open_price=10.0, high=10.2, low=9.9, close=10.0, code="600001"),
+                quote("2024-05-09", previous_close=10.0, open_price=10.0, high=10.2, low=9.9, close=10.0, code="600002"),
+                quote(
+                    "2024-05-10",
+                    previous_close=10.0,
+                    open_price=10.2,
+                    high=11.0,
+                    low=10.2,
+                    close=11.0,
+                    code="600000",
+                    minute_trades=[MinuteTrade(minute="10:00", price=11.0, volume=1000)],
+                ),
+                quote(
+                    "2024-05-10",
+                    previous_close=10.0,
+                    open_price=10.2,
+                    high=11.0,
+                    low=10.0,
+                    close=11.0,
+                    code="600001",
+                    minute_trades=[MinuteTrade(minute="13:30", price=11.0, volume=1000)],
+                ),
+                quote(
+                    "2024-05-10",
+                    previous_close=10.0,
+                    open_price=10.2,
+                    high=11.0,
+                    low=10.0,
+                    close=11.0,
+                    code="600002",
+                    minute_trades=[
+                        MinuteTrade(minute="10:00", price=11.0, volume=1000),
+                        MinuteTrade(minute="10:30", price=10.7, volume=1000),
+                        MinuteTrade(minute="14:30", price=11.0, volume=1000),
+                    ],
+                ),
+            ],
+        )
+
+        picks = build_backtest_picks(
+            conn,
+            start_date="2024-05-10",
+            end_date="2024-05-10",
+            indicator_ids=["volume", "seal", "close"],
+            holding_days=1,
+            profile=BACKTEST_PROFILES["old_cat_afternoon_limit"],
+        )
+
+        self.assertEqual([pick.code for pick in picks], ["600001"])
+        self.assertEqual(picks[0].limit_shape, "afternoon")
+
     def test_backtest_experiment_excludes_single_entry_and_stop_price_sell_strategies(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -223,6 +282,7 @@ class OldCatSelectionTest(unittest.TestCase):
         strategy_ids = {item.strategy_id for item in result.items}
         self.assertIn("old_cat", strategy_ids)
         self.assertIn("old_cat_selection_aligned", strategy_ids)
+        self.assertIn("old_cat_afternoon_limit", strategy_ids)
         self.assertNotIn("b1", strategy_ids)
         self.assertNotIn("old_cat_timely_stop_loss", strategy_ids)
 
