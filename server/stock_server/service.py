@@ -55,6 +55,7 @@ class BacktestProfile:
     engine_strategy_id: str = "old_cat"
     rank_mode: str = RANK_MODE_RECENT_5DAY_CHANGE
     selector: str = "limit_up"
+    max_t_plus_one_close_gain_percent: float = 5.0
     lookback_days: int = 0
 
 
@@ -84,6 +85,17 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         engine_strategy_id="old_cat_selection_aligned",
         selector="old_cat_selection_aligned",
     ),
+    "old_cat_selection_aligned_8pct": BacktestProfile(
+        id="old_cat_selection_aligned_8pct",
+        name="老猫对照：选股口径对齐 8%",
+        description="T 日首板早上封板、非 ST、非一字板；按 T+1 收盘相对 T 日收盘涨幅不超过 8% 过滤；T+2 开盘价买入。",
+        first_limit_only=True,
+        exclude_st=True,
+        limit_shapes={"morning"},
+        engine_strategy_id="old_cat_selection_aligned",
+        selector="old_cat_selection_aligned",
+        max_t_plus_one_close_gain_percent=8.0,
+    ),
     "old_cat_timely_stop_loss": BacktestProfile(
         id="old_cat_timely_stop_loss",
         name="老猫对照：止损价卖出",
@@ -101,14 +113,6 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         exclude_st=True,
         limit_shapes={"morning"},
         rank_mode=RANK_MODE_STOP_LOSS_LOSS,
-    ),
-    "old_cat_afternoon_limit": BacktestProfile(
-        id="old_cat_afternoon_limit",
-        name="老猫对照：下午封板",
-        description="选股和买卖规则与老猫战法一致，但只做首板且下午封板的股票。",
-        first_limit_only=True,
-        exclude_st=True,
-        limit_shapes={"afternoon"},
     ),
     "b1": BacktestProfile(
         id="b1",
@@ -461,7 +465,7 @@ def build_old_cat_selection_aligned_backtest_picks(
         snapshots = apply_backtest_profile(conn, snapshots, profile)
         for snapshot in snapshots:
             pick = snapshot_to_pick(conn, snapshot, holding_days)
-            if is_old_cat_selection_aligned_candidate(pick):
+            if is_old_cat_selection_aligned_candidate(pick, profile.max_t_plus_one_close_gain_percent):
                 picks.append(pick)
     return picks
 
@@ -722,11 +726,11 @@ def is_old_cat_buy_candidate(pick: StockPickOut, decision_date: str) -> bool:
     return decision_close > 0 and decision_close <= pick.close * 1.05
 
 
-def is_old_cat_selection_aligned_candidate(pick: StockPickOut) -> bool:
+def is_old_cat_selection_aligned_candidate(pick: StockPickOut, max_gain_percent: float = 5.0) -> bool:
     if len(pick.future_closes) < 1:
         return False
     decision_close = pick.future_closes[0]
-    return decision_close > 0 and decision_close <= pick.close * 1.05
+    return decision_close > 0 and decision_close <= pick.close * (1.0 + max_gain_percent / 100.0)
 
 
 def market_above_ma25(conn: sqlite3.Connection, trade_date: str) -> bool:
