@@ -1037,6 +1037,9 @@ private fun TradingPage() {
     var adviceErrorMessage by remember { mutableStateOf<String?>(null) }
     var sellingPosition by remember { mutableStateOf<TradePosition?>(null) }
     var buyingAdvicePick by remember { mutableStateOf<StockPick?>(null) }
+    var historyExpanded by remember { mutableStateOf(false) }
+    var selectedHistoryDate by remember { mutableStateOf(todayDateString()) }
+    var showAllHistory by remember { mutableStateOf(false) }
 
     LaunchedEffect(refreshRequest, adviceDate) {
         isLoading = true
@@ -1126,16 +1129,123 @@ private fun TradingPage() {
                     )
                 }
             }
-            item { Text("历史交易", color = Ink, fontWeight = FontWeight.Bold) }
-            if (book.history.isEmpty()) {
-                item { EmptyState("暂无历史交易。卖出持仓后会自动进入历史交易。") }
-            } else {
-                items(book.history) { position ->
-                    TradePositionCard(position = position, onSell = null)
+            tradeHistoryItems(
+                book = book,
+                expanded = historyExpanded,
+                selectedDate = selectedHistoryDate,
+                showAll = showAllHistory,
+                onExpandedChange = { historyExpanded = it },
+                onSelectedDateChange = {
+                    selectedHistoryDate = it
+                    showAllHistory = false
+                    historyExpanded = true
+                },
+                onShowAll = {
+                    showAllHistory = true
+                    historyExpanded = true
                 }
+            )
+        }
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.tradeHistoryItems(
+    book: TradeBook,
+    expanded: Boolean,
+    selectedDate: String,
+    showAll: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSelectedDateChange: (String) -> Unit,
+    onShowAll: () -> Unit
+) {
+    val today = todayDateString()
+    val todayHistory = book.history.filter { it.matchesTradeDate(today) }
+    val olderHistory = book.history.filterNot { it.matchesTradeDate(today) }
+    val visibleOlderHistory = if (showAll) olderHistory else olderHistory.filter { it.matchesTradeDate(selectedDate) }
+
+    item { Text("当日交易", color = Ink, fontWeight = FontWeight.Bold) }
+    if (todayHistory.isEmpty()) {
+        item { EmptyState("今日暂无已完成交易。") }
+    } else {
+        items(todayHistory, key = { it.id }) { position ->
+            TradePositionCard(position = position, onSell = null)
+        }
+    }
+
+    item {
+        TradeHistoryControlCard(
+            totalCount = olderHistory.size,
+            visibleCount = visibleOlderHistory.size,
+            expanded = expanded,
+            selectedDate = selectedDate,
+            showAll = showAll,
+            onExpandedChange = onExpandedChange,
+            onSelectedDateChange = onSelectedDateChange,
+            onShowAll = onShowAll
+        )
+    }
+    if (book.history.isEmpty()) {
+        item { EmptyState("暂无历史交易。卖出持仓后会自动进入历史交易。") }
+    } else if (expanded) {
+        if (visibleOlderHistory.isEmpty()) {
+            item {
+                EmptyState(if (showAll) "暂无其他历史交易。" else "$selectedDate 暂无历史交易。")
+            }
+        } else {
+            items(visibleOlderHistory, key = { it.id }) { position ->
+                TradePositionCard(position = position, onSell = null)
             }
         }
     }
+}
+
+@Composable
+private fun TradeHistoryControlCard(
+    totalCount: Int,
+    visibleCount: Int,
+    expanded: Boolean,
+    selectedDate: String,
+    showAll: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSelectedDateChange: (String) -> Unit,
+    onShowAll: () -> Unit
+) {
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = Panel),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("其他历史交易", color = Ink, fontWeight = FontWeight.Bold)
+                    Text(
+                        if (showAll) "全部展示 $visibleCount / $totalCount 笔" else "$selectedDate 展示 $visibleCount / $totalCount 笔",
+                        color = Muted,
+                        fontSize = 12.sp
+                    )
+                }
+                TextButton(onClick = { onExpandedChange(!expanded) }) {
+                    Text(if (expanded) "收起" else "展开")
+                }
+            }
+            CalendarDateSelector(
+                title = "历史日期",
+                value = selectedDate,
+                onSelected = onSelectedDateChange
+            )
+            Button(
+                onClick = onShowAll,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ActionButtonColors()
+            ) {
+                Text("全部展示")
+            }
+        }
+    }
+}
+
+private fun TradePosition.matchesTradeDate(date: String): Boolean {
+    return buyDate == date || sellDate == date
 }
 
 @Composable
