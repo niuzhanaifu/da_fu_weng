@@ -517,12 +517,17 @@ def build_jia_ban_backtest_picks(
     profile: BacktestProfile,
     allow_below_market_ma25: bool,
 ) -> list[StockPickOut]:
+    selected_end = end_date or repository.latest_quote_date(conn)
+    if not selected_end:
+        return []
+    selected_start = start_date or date_days_before(selected_end, DEFAULT_SYNC_DAYS)
+    load_start = date_days_before(selected_start, profile.lookback_days) if profile.lookback_days > 0 else selected_start
+
     quotes_by_code: dict[str, list[DailyQuoteIn]] = {}
-    for trade_date in repository.quote_dates_on_or_before(conn, end_date):
-        for quote in repository.load_quotes(conn, trade_date):
-            if board and quote.board.value != board:
-                continue
-            quotes_by_code.setdefault(quote.code, []).append(quote)
+    for quote in repository.load_daily_quotes_between(conn, load_start, selected_end):
+        if board and quote.board.value != board:
+            continue
+        quotes_by_code.setdefault(quote.code, []).append(quote)
 
     snapshots: list[PickSnapshot] = []
     for quotes in quotes_by_code.values():

@@ -116,6 +116,24 @@ def load_quotes(conn: sqlite3.Connection, trade_date: str) -> list[DailyQuoteIn]
     return [row_to_quote(row, minutes_by_code.get(row["code"], [])) for row in rows]
 
 
+def load_daily_quotes_between(
+    conn: sqlite3.Connection,
+    start_date: str | None,
+    end_date: str | None,
+) -> list[DailyQuoteIn]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM daily_quotes
+        WHERE (? IS NULL OR trade_date >= ?)
+          AND (? IS NULL OR trade_date <= ?)
+        ORDER BY code ASC, trade_date ASC
+        """,
+        (start_date, start_date, end_date, end_date),
+    ).fetchall()
+    return [row_to_quote(row, []) for row in rows]
+
+
 def count_quotes(conn: sqlite3.Connection, trade_date: str) -> int:
     row = conn.execute(
         "SELECT COUNT(*) AS count FROM daily_quotes WHERE trade_date = ?",
