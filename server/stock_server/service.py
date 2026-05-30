@@ -40,6 +40,10 @@ B1_LINE_PROXIMITY_MAX = 0.035
 B1_VOLUME_PREVIOUS_RATIO_MAX = 0.85
 B1_VOLUME_AVG_RATIO_MAX = 0.75
 B1_N_SHAPE_LOOKBACK_DAYS = 60
+JIA_BAN_LOOKBACK_DAYS = 120
+JIA_BAN_MIN_HISTORY_DAYS = 60
+JIA_BAN_LINE_TOLERANCE = 0.02
+JIA_BAN_MAX_T_DAY_DROP_PERCENT = 7.0
 
 
 @dataclass(frozen=True)
@@ -57,6 +61,8 @@ class BacktestProfile:
     selector: str = "limit_up"
     max_t_plus_one_close_gain_percent: float = 5.0
     lookback_days: int = 0
+    min_history_days: int = 0
+    max_positions_per_day: int | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +120,19 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         limit_shapes={"morning"},
         rank_mode=RANK_MODE_STOP_LOSS_LOSS,
     ),
+    "jia_ban": BacktestProfile(
+        id="jia_ban",
+        name="夹板战法",
+        description="三个月箱体内有顶有底，允许 2% 突破；T 日收盘接近底部线且跌幅不超过 7%，T+1 开盘买入；跌破底部线止损，止盈率和持有天数按回测参数执行。",
+        first_limit_only=False,
+        exclude_st=True,
+        engine_strategy_id="jia_ban",
+        rank_mode=RANK_MODE_STOP_LOSS_LOSS,
+        selector="jia_ban",
+        lookback_days=JIA_BAN_LOOKBACK_DAYS,
+        min_history_days=JIA_BAN_MIN_HISTORY_DAYS,
+        max_positions_per_day=3,
+    ),
     "b1": BacktestProfile(
         id="b1",
         name="B1 战法",
@@ -124,6 +143,7 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         rank_mode=RANK_MODE_STOP_LOSS_LOSS,
         selector="b1",
         lookback_days=B1_LOOKBACK_DAYS,
+        min_history_days=B1_MIN_HISTORY_DAYS,
     ),
 }
 
@@ -250,7 +270,7 @@ def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> Ba
     profile = BACKTEST_PROFILES.get(request.strategy_id)
     if profile is None:
         raise ValueError(f"Unsupported backtest strategy: {request.strategy_id}")
-    ensure_quotes_for_backtest(conn, request.start_date, request.end_date, profile.lookback_days)
+    ensure_quotes_for_backtest(conn, request.start_date, request.end_date, profile.lookback_days, profile.min_history_days)
     picks = build_backtest_picks(
         conn,
         request.start_date,
@@ -267,7 +287,7 @@ def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> Ba
         take_profit_percent=request.take_profit_percent,
         strategy_id=profile.engine_strategy_id,
         initial_capital=request.initial_capital,
-        max_positions_per_day=request.max_positions_per_day,
+        max_positions_per_day=effective_max_positions_per_day(request.max_positions_per_day, profile),
         rank_mode=profile.rank_mode,
         max_position_allocation_fraction=profile.max_position_allocation_fraction,
     )
@@ -277,7 +297,8 @@ def run_backtest_experiment(conn: sqlite3.Connection, request: BacktestRequest) 
     excluded_profile_ids = {"b1", "old_cat_timely_stop_loss"}
     experiment_profiles = [profile for profile in BACKTEST_PROFILES.values() if profile.id not in excluded_profile_ids]
     max_lookback_days = max((profile.lookback_days for profile in experiment_profiles), default=0)
-    ensure_quotes_for_backtest(conn, request.start_date, request.end_date, max_lookback_days)
+    max_min_history_days = max((profile.min_history_days for profile in experiment_profiles), default=0)
+    ensure_quotes_for_backtest(conn, request.start_date, request.end_date, max_lookback_days, max_min_history_days)
     items: list[BacktestExperimentItemOut] = []
     for profile in experiment_profiles:
         picks = build_backtest_picks(
@@ -296,7 +317,7 @@ def run_backtest_experiment(conn: sqlite3.Connection, request: BacktestRequest) 
             take_profit_percent=request.take_profit_percent,
             strategy_id=profile.engine_strategy_id,
             initial_capital=request.initial_capital,
-            max_positions_per_day=request.max_positions_per_day,
+            max_positions_per_day=effective_max_positions_per_day(request.max_positions_per_day, profile),
             rank_mode=profile.rank_mode,
             max_position_allocation_fraction=profile.max_position_allocation_fraction,
         )
@@ -314,6 +335,12 @@ def run_backtest_experiment(conn: sqlite3.Connection, request: BacktestRequest) 
         board=request.board,
         items=sorted(items, key=lambda item: item.result.total_return_percent, reverse=True),
     )
+
+
+def effective_max_positions_per_day(requested: int, profile: BacktestProfile) -> int:
+    if profile.max_positions_per_day is None:
+        return requested
+    return min(requested, profile.max_positions_per_day)
 
 
 def get_trade_book(conn: sqlite3.Connection) -> TradeBookOut:
@@ -389,6 +416,7 @@ def ensure_quotes_for_backtest(
     start_date: str | None,
     end_date: str | None,
     lookback_days: int = 0,
+    min_history_days: int = 0,
 ) -> None:
     selected_end = end_date or repository.latest_quote_date(conn)
     if not selected_end:
@@ -399,7 +427,7 @@ def ensure_quotes_for_backtest(
     if (
         dates
         and repository.count_quotes(conn, dates[-1]) >= FULL_DAILY_QUOTE_MIN_COUNT
-        and (lookback_days <= 0 or len(dates) >= B1_MIN_HISTORY_DAYS)
+        and (lookback_days <= 0 or len(dates) >= min_history_days)
     ):
         return
     try:
@@ -420,6 +448,16 @@ def build_backtest_picks(
 ) -> list[StockPickOut]:
     if profile is not None and profile.selector == "b1":
         return build_b1_backtest_picks(conn, start_date, end_date, holding_days, board, profile)
+    if profile is not None and profile.selector == "jia_ban":
+        return build_jia_ban_backtest_picks(
+            conn,
+            start_date,
+            end_date,
+            holding_days,
+            board,
+            profile,
+            allow_below_market_ma25,
+        )
     if profile is not None and profile.selector == "old_cat_selection_aligned":
         return build_old_cat_selection_aligned_backtest_picks(
             conn,
@@ -468,6 +506,109 @@ def build_old_cat_selection_aligned_backtest_picks(
             if is_old_cat_selection_aligned_candidate(pick, profile.max_t_plus_one_close_gain_percent):
                 picks.append(pick)
     return picks
+
+
+def build_jia_ban_backtest_picks(
+    conn: sqlite3.Connection,
+    start_date: str | None,
+    end_date: str | None,
+    holding_days: int,
+    board: str | None,
+    profile: BacktestProfile,
+    allow_below_market_ma25: bool,
+) -> list[StockPickOut]:
+    quotes_by_code: dict[str, list[DailyQuoteIn]] = {}
+    for trade_date in repository.quote_dates_on_or_before(conn, end_date):
+        for quote in repository.load_quotes(conn, trade_date):
+            if board and quote.board.value != board:
+                continue
+            quotes_by_code.setdefault(quote.code, []).append(quote)
+
+    snapshots: list[PickSnapshot] = []
+    for quotes in quotes_by_code.values():
+        snapshots.extend(jia_ban_snapshots_for_code(quotes, start_date, end_date, profile))
+
+    if not allow_below_market_ma25:
+        snapshots = [snapshot for snapshot in snapshots if market_above_ma25(conn, snapshot.trade_date)]
+
+    snapshots.sort(key=lambda item: (item.trade_date, item.board.value, item.code))
+    pick_holding_days = max(holding_days, 1)
+    return [snapshot_to_pick(conn, snapshot, pick_holding_days) for snapshot in snapshots]
+
+
+def jia_ban_snapshots_for_code(
+    quotes: Sequence[DailyQuoteIn],
+    start_date: str | None,
+    end_date: str | None,
+    profile: BacktestProfile,
+) -> list[PickSnapshot]:
+    sorted_quotes = sorted(quotes, key=lambda item: item.trade_date)
+    result: list[PickSnapshot] = []
+    for index, quote in enumerate(sorted_quotes):
+        if not in_date_range(quote.trade_date, start_date, end_date):
+            continue
+        history = sorted_quotes[max(0, index - JIA_BAN_MIN_HISTORY_DAYS) : index]
+        if matches_jia_ban_conditions(quote, history, profile):
+            result.append(jia_ban_snapshot(quote, history))
+    return result
+
+
+def matches_jia_ban_conditions(
+    quote: DailyQuoteIn,
+    history: Sequence[DailyQuoteIn],
+    profile: BacktestProfile,
+) -> bool:
+    if quote.board not in (MarketBoard.main, MarketBoard.chinext):
+        return False
+    if profile.exclude_st and is_st_stock(quote.name):
+        return False
+    if len(history) < JIA_BAN_MIN_HISTORY_DAYS:
+        return False
+    if quote.previous_close <= 0:
+        return False
+
+    day_change_percent = (quote.close - quote.previous_close) / quote.previous_close * 100.0
+    if day_change_percent < -JIA_BAN_MAX_T_DAY_DROP_PERCENT:
+        return False
+
+    top_line = max(item.high for item in history)
+    bottom_line = min(item.low for item in history)
+    if bottom_line <= 0 or top_line <= bottom_line:
+        return False
+
+    lower_limit = bottom_line * (1.0 - JIA_BAN_LINE_TOLERANCE)
+    upper_limit = top_line * (1.0 + JIA_BAN_LINE_TOLERANCE)
+    if any(item.low < lower_limit or item.high > upper_limit for item in history):
+        return False
+
+    bottom_touches = sum(1 for item in history if item.low <= bottom_line * (1.0 + JIA_BAN_LINE_TOLERANCE))
+    top_touches = sum(1 for item in history if item.high >= top_line * (1.0 - JIA_BAN_LINE_TOLERANCE))
+    if bottom_touches < 2 or top_touches < 2:
+        return False
+
+    return lower_limit <= quote.close <= bottom_line * (1.0 + JIA_BAN_LINE_TOLERANCE)
+
+
+def jia_ban_snapshot(quote: DailyQuoteIn, history: Sequence[DailyQuoteIn]) -> PickSnapshot:
+    bottom_line = min(item.low for item in history)
+    return PickSnapshot(
+        trade_date=quote.trade_date,
+        code=quote.code,
+        name=quote.name,
+        board=quote.board,
+        concept=quote.concept,
+        close=quote.close,
+        change_percent=(quote.close - quote.previous_close) / quote.previous_close * 100.0 if quote.previous_close > 0 else 0.0,
+        volume_ratio=quote.volume_ratio,
+        turnover_rate=quote.turnover_rate,
+        total_mv_wan=quote.total_mv_wan,
+        sealed_amount_wan=quote.sealed_amount_wan,
+        stop_loss_price=bottom_line,
+        limit_shape="jia_ban",
+        limit_shape_label="夹板战法",
+        next_open=quote.next_open,
+        future_closes=quote.future_closes,
+    )
 
 
 def build_b1_backtest_picks(

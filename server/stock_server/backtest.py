@@ -73,6 +73,65 @@ class OldCatStrategy:
         )
 
 
+@dataclass(frozen=True)
+class JiaBanStrategy:
+    id: str = "jia_ban"
+
+    def simulate_trade(self, pick: StockPickOut, holding_days: int, take_profit_percent: float) -> BacktestTradeOut | None:
+        trade_holding_days = max(1, holding_days)
+        if (
+            len(pick.future_opens) < trade_holding_days
+            or len(pick.future_closes) < trade_holding_days
+            or len(pick.future_highs) < trade_holding_days
+            or len(pick.future_lows) < trade_holding_days
+            or len(pick.future_dates) < trade_holding_days
+        ):
+            return None
+
+        buy_price = pick.future_opens[0]
+        if buy_price is None or buy_price <= 0:
+            return None
+
+        take_profit_price = buy_price * (1.0 + take_profit_percent / 100.0)
+        sell_price = pick.future_closes[trade_holding_days - 1]
+        sell_index = trade_holding_days - 1
+        exit_reason = f"夹板战法：持有{trade_holding_days}个交易日"
+
+        for index in range(1, trade_holding_days):
+            high = pick.future_highs[index]
+            close = pick.future_closes[index]
+            is_final_day = index == trade_holding_days - 1
+
+            if not is_final_day and pick.future_lows[index] < pick.stop_loss_price:
+                sell_price = pick.stop_loss_price if high >= pick.stop_loss_price else close
+                sell_index = index
+                exit_reason = (
+                    "夹板战法：跌破底部线止损"
+                    if high >= pick.stop_loss_price
+                    else "夹板战法：跳空跌破底部线，按收盘价止损"
+                )
+                break
+
+            if high >= take_profit_price:
+                sell_price = take_profit_price
+                sell_index = index
+                exit_reason = f"夹板战法：涨幅达到{take_profit_percent:.0f}%止盈"
+                break
+
+        return BacktestTradeOut(
+            code=pick.code,
+            name=pick.name,
+            board=pick.board,
+            buy_date=pick.future_dates[0],
+            sell_date=pick.future_dates[sell_index],
+            buy_price=buy_price,
+            sell_price=sell_price,
+            stop_loss_price=pick.stop_loss_price,
+            return_percent=(sell_price - buy_price) / buy_price * 100.0,
+            exit_reason=exit_reason,
+        )
+
+
 STRATEGIES: dict[str, BacktestStrategy] = {
     "old_cat": OldCatStrategy(),
     "old_cat_timely_stop_loss": OldCatStrategy(
@@ -83,6 +142,7 @@ STRATEGIES: dict[str, BacktestStrategy] = {
         id="old_cat_selection_aligned",
         require_buy_open_within_limit=False,
     ),
+    "jia_ban": JiaBanStrategy(),
 }
 
 
