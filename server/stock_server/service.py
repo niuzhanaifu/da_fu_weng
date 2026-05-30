@@ -40,8 +40,8 @@ B1_LINE_PROXIMITY_MAX = 0.035
 B1_VOLUME_PREVIOUS_RATIO_MAX = 0.85
 B1_VOLUME_AVG_RATIO_MAX = 0.75
 B1_N_SHAPE_LOOKBACK_DAYS = 60
-JIA_BAN_LOOKBACK_DAYS = 120
-JIA_BAN_MIN_HISTORY_DAYS = 60
+JIA_BAN_LOOKBACK_DAYS = 240
+JIA_BAN_MIN_HISTORY_DAYS = 120
 JIA_BAN_LINE_TOLERANCE = 0.02
 JIA_BAN_MAX_T_DAY_DROP_PERCENT = 7.0
 
@@ -123,7 +123,7 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
     "jia_ban": BacktestProfile(
         id="jia_ban",
         name="夹板战法",
-        description="三个月箱体内有顶有底，允许 2% 突破；T 日收盘接近底部线且跌幅不超过 7%，T+1 开盘买入；跌破底部线止损，止盈率和持有天数按回测参数执行。",
+        description="六个月箱体内有顶有底，允许 2% 突破；T 日收盘接近底部线且跌幅不超过 7%，T+1 开盘买入；跌破底部线止损，止盈率和持有天数按回测参数执行。",
         first_limit_only=False,
         exclude_st=True,
         engine_strategy_id="jia_ban",

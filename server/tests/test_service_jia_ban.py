@@ -16,10 +16,10 @@ class JiaBanBacktestTest(unittest.TestCase):
         rows = sandwich_history("600000")
         rows.extend(
             [
-                quote("2024-03-01", previous_close=10.6, open_price=10.4, high=10.4, low=10.0, close=10.1),
-                quote("2024-03-04", previous_close=10.1, open_price=10.2, high=10.5, low=10.1, close=10.3),
-                quote("2024-03-05", previous_close=10.3, open_price=10.4, high=11.1, low=10.2, close=10.9),
-                quote("2024-03-06", previous_close=10.9, open_price=10.8, high=10.9, low=10.5, close=10.7),
+                quote("2024-05-01", previous_close=10.6, open_price=10.4, high=10.4, low=10.0, close=10.1),
+                quote("2024-05-02", previous_close=10.1, open_price=10.2, high=10.5, low=10.1, close=10.3),
+                quote("2024-05-03", previous_close=10.3, open_price=10.4, high=11.1, low=10.2, close=10.9),
+                quote("2024-05-06", previous_close=10.9, open_price=10.8, high=10.9, low=10.5, close=10.7),
             ]
         )
         from stock_server import repository
@@ -28,8 +28,8 @@ class JiaBanBacktestTest(unittest.TestCase):
 
         picks = build_backtest_picks(
             conn,
-            start_date="2024-03-01",
-            end_date="2024-03-01",
+            start_date="2024-05-01",
+            end_date="2024-05-01",
             indicator_ids=[],
             holding_days=3,
             profile=BACKTEST_PROFILES["jia_ban"],
@@ -44,15 +44,15 @@ class JiaBanBacktestTest(unittest.TestCase):
         conn.row_factory = sqlite3.Row
         create_schema(conn)
         rows = sandwich_history("600000")
-        rows.append(quote("2024-03-01", previous_close=11.0, open_price=10.5, high=10.5, low=10.0, close=10.1))
+        rows.append(quote("2024-05-01", previous_close=11.0, open_price=10.5, high=10.5, low=10.0, close=10.1))
         from stock_server import repository
 
         repository.upsert_daily_quotes(conn, rows)
 
         picks = build_backtest_picks(
             conn,
-            start_date="2024-03-01",
-            end_date="2024-03-01",
+            start_date="2024-05-01",
+            end_date="2024-05-01",
             indicator_ids=[],
             holding_days=3,
             profile=BACKTEST_PROFILES["jia_ban"],
@@ -225,10 +225,10 @@ def create_schema(conn: sqlite3.Connection) -> None:
 def sandwich_history(code: str) -> list[DailyQuoteIn]:
     start = date(2024, 1, 1)
     rows: list[DailyQuoteIn] = []
-    for index in range(60):
+    for index in range(120):
         trade_date = (start + timedelta(days=index)).isoformat()
-        high = 12.0 if index in (10, 40) else 11.4
-        low = 10.0 if index in (5, 35) else 10.3
+        high = 12.0 if index in (10, 90) else 11.4
+        low = 10.0 if index in (5, 80) else 10.3
         rows.append(
             quote(
                 trade_date,
