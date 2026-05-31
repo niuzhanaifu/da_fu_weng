@@ -244,6 +244,76 @@ class OldCatSelectionTest(unittest.TestCase):
         self.assertEqual([pick.trade_date for pick in picks], ["2024-05-10"])
         self.assertEqual(picks[0].future_closes[0], 11.6)
 
+    def test_backtest_volume_ratio_override_replaces_default_indicator_threshold(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        create_schema(conn)
+        repository.upsert_daily_quotes(
+            conn,
+            [
+                quote("2024-05-09", previous_close=10.0, open_price=10.0, high=10.2, low=9.9, close=10.0),
+                quote(
+                    "2024-05-10",
+                    previous_close=10.0,
+                    open_price=10.2,
+                    high=11.0,
+                    low=10.2,
+                    close=11.0,
+                    volume_ratio=1.6,
+                    minute_trades=[MinuteTrade(minute="10:00", price=11.0, volume=1000)],
+                ),
+                quote("2024-05-13", previous_close=11.0, open_price=11.2, high=11.4, low=11.0, close=11.3),
+            ],
+        )
+
+        default_picks = build_backtest_picks(
+            conn,
+            start_date="2024-05-10",
+            end_date="2024-05-10",
+            indicator_ids=["volume", "seal", "close"],
+            holding_days=1,
+            profile=BACKTEST_PROFILES["old_cat"],
+        )
+        override_picks = build_backtest_picks(
+            conn,
+            start_date="2024-05-10",
+            end_date="2024-05-10",
+            indicator_ids=["volume", "seal", "close"],
+            holding_days=1,
+            profile=BACKTEST_PROFILES["old_cat"],
+            volume_ratio_min=1.5,
+        )
+
+        self.assertEqual(default_picks, [])
+        self.assertEqual([pick.trade_date for pick in override_picks], ["2024-05-10"])
+
+    def test_selection_page_keeps_default_volume_ratio_threshold(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        create_schema(conn)
+        repository.upsert_daily_quotes(
+            conn,
+            [
+                quote("2024-05-09", previous_close=10.0, open_price=10.0, high=10.2, low=9.9, close=10.0),
+                quote(
+                    "2024-05-10",
+                    previous_close=10.0,
+                    open_price=10.2,
+                    high=11.0,
+                    low=10.2,
+                    close=11.0,
+                    volume_ratio=1.6,
+                    minute_trades=[MinuteTrade(minute="10:00", price=11.0, volume=1000)],
+                ),
+                quote("2024-05-13", previous_close=11.0, open_price=11.2, high=11.4, low=11.0, close=11.3),
+            ],
+        )
+
+        group = run_selection_group(conn, None, ["volume", "seal", "close"], "old_cat_buy")
+
+        self.assertEqual(group.trade_date, "2024-05-13")
+        self.assertEqual(group.picks, [])
+
     def test_backtest_experiment_excludes_single_entry_and_stop_price_sell_strategies(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -314,6 +384,7 @@ def quote(
     code: str = "600000",
     name: str = "Sample Equity",
     sealed_amount_wan: float = 6000.0,
+    volume_ratio: float = 2.0,
     minute_trades: list[MinuteTrade] | None = None,
 ) -> DailyQuoteIn:
     return DailyQuoteIn(
@@ -326,7 +397,7 @@ def quote(
         high=high,
         low=low,
         close=close,
-        volume_ratio=2.0,
+        volume_ratio=volume_ratio,
         turnover_rate=10.0,
         total_mv_wan=100000.0,
         sealed_amount_wan=sealed_amount_wan,

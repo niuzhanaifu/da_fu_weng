@@ -300,6 +300,7 @@ def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> Ba
         request.board.value if request.board else None,
         profile,
         request.allow_below_market_ma25,
+        request.volume_ratio_min,
     )
     return run_backtest(
         picks=picks,
@@ -330,6 +331,7 @@ def run_backtest_experiment(conn: sqlite3.Connection, request: BacktestRequest) 
             request.board.value if request.board else None,
             profile,
             request.allow_below_market_ma25,
+            request.volume_ratio_min,
         )
         result = run_backtest(
             picks=picks,
@@ -465,6 +467,7 @@ def build_backtest_picks(
     board: str | None = None,
     profile: BacktestProfile | None = None,
     allow_below_market_ma25: bool = True,
+    volume_ratio_min: float | None = None,
 ) -> list[StockPickOut]:
     if profile is not None and profile.selector == "b1":
         return build_b1_backtest_picks(conn, start_date, end_date, holding_days, board, profile)
@@ -498,13 +501,14 @@ def build_backtest_picks(
             board,
             profile,
             allow_below_market_ma25,
+            volume_ratio_min,
         )
 
     picks: list[StockPickOut] = []
     for trade_date in repository.quote_dates_between(conn, start_date, end_date):
         if not allow_below_market_ma25 and not market_above_ma25(conn, trade_date):
             continue
-        snapshots = select_limit_up(repository.load_quotes(conn, trade_date), indicator_ids)
+        snapshots = select_limit_up(repository.load_quotes(conn, trade_date), indicator_ids, volume_ratio_min)
         if board:
             snapshots = [snapshot for snapshot in snapshots if snapshot.board.value == board]
         if profile is not None:
@@ -522,12 +526,13 @@ def build_old_cat_selection_aligned_backtest_picks(
     board: str | None,
     profile: BacktestProfile,
     allow_below_market_ma25: bool,
+    volume_ratio_min: float | None = None,
 ) -> list[StockPickOut]:
     picks: list[StockPickOut] = []
     for trade_date in repository.quote_dates_between(conn, start_date, end_date):
         if not allow_below_market_ma25 and not market_above_ma25(conn, trade_date):
             continue
-        snapshots = select_limit_up(repository.load_quotes(conn, trade_date), indicator_ids)
+        snapshots = select_limit_up(repository.load_quotes(conn, trade_date), indicator_ids, volume_ratio_min)
         if board:
             snapshots = [snapshot for snapshot in snapshots if snapshot.board.value == board]
         snapshots = apply_backtest_profile(conn, snapshots, profile)

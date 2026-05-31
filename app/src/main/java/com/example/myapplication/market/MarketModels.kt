@@ -140,6 +140,7 @@ data class BacktestHistoryEntry(
     val endDate: String,
     val holdingDays: Int,
     val initialCapital: Double,
+    val volumeRatioMin: Double?,
     val board: MarketBoard?,
     val result: BacktestResult
 )

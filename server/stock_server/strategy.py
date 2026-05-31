@@ -28,6 +28,7 @@ INDICATORS = [
         description="收盘价贴近最高价，确认尾盘没有明显开板回落。",
     ),
 ]
+DEFAULT_VOLUME_RATIO_MIN = 1.8
 
 
 @dataclass(frozen=True)
@@ -51,8 +52,14 @@ class PickSnapshot:
     target_price: float = 0.0
 
 
-def select_limit_up(quotes: Iterable[DailyQuoteIn], indicator_ids: Sequence[str]) -> list[PickSnapshot]:
+def select_limit_up(
+    quotes: Iterable[DailyQuoteIn],
+    indicator_ids: Sequence[str],
+    volume_ratio_min: float | None = None,
+) -> list[PickSnapshot]:
     ids = set(indicator_ids)
+    if volume_ratio_min is not None:
+        ids.add("volume")
     result: list[PickSnapshot] = []
     for quote in quotes:
         if quote.board not in (MarketBoard.main, MarketBoard.chinext):
@@ -61,7 +68,7 @@ def select_limit_up(quotes: Iterable[DailyQuoteIn], indicator_ids: Sequence[str]
             continue
         if is_one_word_limit_up(quote):
             continue
-        if not matches_indicators(quote, ids):
+        if not matches_indicators(quote, ids, volume_ratio_min):
             continue
         result.append(to_pick(quote))
 
@@ -81,9 +88,14 @@ def is_one_word_limit_up(quote: DailyQuoteIn) -> bool:
     )
 
 
-def matches_indicators(quote: DailyQuoteIn, indicator_ids: set[str]) -> bool:
+def matches_indicators(
+    quote: DailyQuoteIn,
+    indicator_ids: set[str],
+    volume_ratio_min: float | None = None,
+) -> bool:
+    effective_volume_ratio_min = volume_ratio_min if volume_ratio_min is not None else DEFAULT_VOLUME_RATIO_MIN
     for indicator_id in indicator_ids:
-        if indicator_id == "volume" and 0.0 < quote.volume_ratio < 1.8:
+        if indicator_id == "volume" and 0.0 < quote.volume_ratio < effective_volume_ratio_min:
             return False
         if indicator_id == "seal" and 0.0 < quote.sealed_amount_wan < 5000.0:
             return False

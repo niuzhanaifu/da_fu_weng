@@ -32,6 +32,7 @@ object MarketApiClient {
         endDate: String?,
         holdingDays: Int,
         takeProfitPercent: Double,
+        volumeRatioMin: Double?,
         allowBelowMarketMa25: Boolean,
         board: MarketBoard?,
         maxPositionsPerDay: Int = 3
@@ -42,6 +43,7 @@ object MarketApiClient {
             put("max_positions_per_day", maxPositionsPerDay)
             board?.let { put("board", if (it == MarketBoard.ChiNext) "chinext" else "main") }
             put("take_profit_percent", takeProfitPercent)
+            volumeRatioMin?.let { put("volume_ratio_min", it) }
             put("allow_below_market_ma25", allowBelowMarketMa25)
             if (!startDate.isNullOrBlank()) put("start_date", startDate)
             if (!endDate.isNullOrBlank()) put("end_date", endDate)
@@ -54,6 +56,7 @@ object MarketApiClient {
         endDate: String?,
         holdingDays: Int,
         takeProfitPercent: Double,
+        volumeRatioMin: Double?,
         allowBelowMarketMa25: Boolean,
         board: MarketBoard?,
         maxPositionsPerDay: Int = 3
@@ -63,6 +66,7 @@ object MarketApiClient {
             put("holding_days", holdingDays)
             put("max_positions_per_day", maxPositionsPerDay)
             put("take_profit_percent", takeProfitPercent)
+            volumeRatioMin?.let { put("volume_ratio_min", it) }
             put("allow_below_market_ma25", allowBelowMarketMa25)
             board?.let { put("board", if (it == MarketBoard.ChiNext) "chinext" else "main") }
             if (!startDate.isNullOrBlank()) put("start_date", startDate)

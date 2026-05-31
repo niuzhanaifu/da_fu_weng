@@ -124,6 +124,7 @@ class BacktestRequest(BaseModel):
     holding_days: int = Field(default=3, ge=1, le=10)
     take_profit_percent: float = Field(default=10.0, ge=0.1, le=50.0)
     allow_below_market_ma25: bool = True
+    volume_ratio_min: Optional[float] = Field(default=None, ge=0.0)
 
 
 class BacktestTradeOut(BaseModel):

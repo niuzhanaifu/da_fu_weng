@@ -45,6 +45,7 @@ object BacktestHistoryStore {
             .put("end_date", endDate)
             .put("holding_days", holdingDays)
             .put("initial_capital", initialCapital)
+            .put("volume_ratio_min", volumeRatioMin)
             .put("board", board?.let { if (it == MarketBoard.ChiNext) "chinext" else "main" })
             .put("result", result.toJson())
     }
@@ -94,6 +95,7 @@ object BacktestHistoryStore {
             endDate = getString("end_date"),
             holdingDays = getInt("holding_days"),
             initialCapital = getDouble("initial_capital"),
+            volumeRatioMin = if (has("volume_ratio_min") && !isNull("volume_ratio_min")) optDouble("volume_ratio_min") else null,
             board = optString("board").toBoardOrNull(),
             result = getJSONObject("result").toResult()
         )

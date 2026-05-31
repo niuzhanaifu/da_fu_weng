@@ -575,6 +575,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
     var holdingDays by remember { mutableIntStateOf(3) }
     var maxPositionsPerDay by remember { mutableIntStateOf(3) }
     var takeProfitText by remember { mutableStateOf("10") }
+    var volumeRatioText by remember { mutableStateOf("1.8") }
     var allowBelowMarketMa25 by remember { mutableStateOf(true) }
     var boardFilter by remember { mutableStateOf(PickBoardFilter.All) }
     var selectedStrategy by remember { mutableStateOf(BacktestStrategy.OldCat) }
@@ -600,6 +601,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
         showDoneDialog = false
         errorMessage = null
         val takeProfitPercent = takeProfitText.toDoubleOrNull() ?: 10.0
+        val volumeRatioMin = volumeRatioText.toDoubleOrNull()
         AppLogger.i("Backtest", "started remote strategy=${selectedStrategy.id} range=$normalizedStart..$normalizedEnd holdingDays=$holdingDays maxPositions=$maxPositionsPerDay")
         delay(350)
         try {
@@ -614,6 +616,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                 endDate = normalizedEnd.ifEmpty { null },
                 holdingDays = holdingDays,
                 takeProfitPercent = takeProfitPercent,
+                volumeRatioMin = volumeRatioMin,
                 allowBelowMarketMa25 = allowBelowMarketMa25,
                 board = board,
                 maxPositionsPerDay = maxPositionsPerDay
@@ -628,6 +631,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                 endDate = normalizedEnd,
                 holdingDays = holdingDays,
                 initialCapital = currentResult.initialCapital,
+                volumeRatioMin = volumeRatioMin,
                 board = board,
                 result = currentResult
             )
@@ -650,6 +654,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
         isExperimentRunning = true
         experimentError = null
         val takeProfitPercent = takeProfitText.toDoubleOrNull() ?: 10.0
+        val volumeRatioMin = volumeRatioText.toDoubleOrNull()
         delay(350)
         try {
             experimentResult = MarketApiClient.runBacktestExperiments(
@@ -657,6 +662,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                 endDate = normalizedEnd.ifEmpty { null },
                 holdingDays = holdingDays,
                 takeProfitPercent = takeProfitPercent,
+                volumeRatioMin = volumeRatioMin,
                 allowBelowMarketMa25 = allowBelowMarketMa25,
                 board = when (boardFilter) {
                     PickBoardFilter.All -> null
@@ -730,6 +736,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                 holdingDays = holdingDays,
                 maxPositionsPerDay = maxPositionsPerDay,
                 takeProfitText = takeProfitText,
+                volumeRatioText = volumeRatioText,
                 allowBelowMarketMa25 = allowBelowMarketMa25,
                 onHoldingDays = {
                     AppLogger.d("Backtest", "holdingDays changed=$it")
@@ -737,6 +744,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                 },
                 onMaxPositionsPerDay = { maxPositionsPerDay = it },
                 onTakeProfit = { takeProfitText = it },
+                onVolumeRatio = { volumeRatioText = it },
                 onAllowBelowMarketMa25 = { allowBelowMarketMa25 = it },
                 isRunning = isRunning,
                 onRun = { runRequest += 1 }
@@ -764,6 +772,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                     startDate = entry.startDate
                     endDate = entry.endDate
                     holdingDays = entry.holdingDays
+                    volumeRatioText = entry.volumeRatioMin?.let { trimDoubleText(it) } ?: "1.8"
                     selectedStrategy = BacktestStrategy.values().firstOrNull { it.id == entry.strategyId } ?: BacktestStrategy.OldCat
                     boardFilter = when (entry.board) {
                         MarketBoard.Main -> PickBoardFilter.Main
@@ -1704,10 +1713,12 @@ private fun BacktestControls(
     holdingDays: Int,
     maxPositionsPerDay: Int,
     takeProfitText: String,
+    volumeRatioText: String,
     allowBelowMarketMa25: Boolean,
     onHoldingDays: (Int) -> Unit,
     onMaxPositionsPerDay: (Int) -> Unit,
     onTakeProfit: (String) -> Unit,
+    onVolumeRatio: (String) -> Unit,
     onAllowBelowMarketMa25: (Boolean) -> Unit,
     isRunning: Boolean,
     onRun: () -> Unit
@@ -1723,6 +1734,15 @@ private fun BacktestControls(
                 value = takeProfitText,
                 onValueChange = { raw -> onTakeProfit(raw.filter { it.isDigit() || it == '.' }.take(5)) },
                 label = { Text("止盈率 %") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = volumeRatioText,
+                onValueChange = { raw -> onVolumeRatio(raw.filter { it.isDigit() || it == '.' }.take(4)) },
+                label = { Text("回测量比放大") },
+                supportingText = { Text("仅覆盖回测里的量比指标，选股页仍使用默认 1.8") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth()
@@ -1754,7 +1774,8 @@ private fun BacktestControls(
             Button(
                 onClick = onRun,
                 enabled = !isRunning &&
-                    (takeProfitText.toDoubleOrNull() ?: 0.0) > 0.0,
+                    (takeProfitText.toDoubleOrNull() ?: 0.0) > 0.0 &&
+                    (volumeRatioText.toDoubleOrNull() ?: 0.0) > 0.0,
                 modifier = Modifier.fillMaxWidth(),
                 colors = ActionButtonColors()
             ) {
@@ -2346,6 +2367,11 @@ private fun calendarCells(year: Int, month: Int): List<Int?> {
 
 private fun formatDate(year: Int, month: Int, day: Int): String {
     return "%04d-%02d-%02d".format(year, month + 1, day)
+}
+
+private fun trimDoubleText(value: Double): String {
+    val raw = "%.2f".format(value)
+    return raw.trimEnd('0').trimEnd('.')
 }
 
 @Composable
