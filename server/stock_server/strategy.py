@@ -48,6 +48,7 @@ class PickSnapshot:
     limit_shape_label: str
     next_open: float | None
     future_closes: list[float]
+    target_price: float = 0.0
 
 
 def select_limit_up(quotes: Iterable[DailyQuoteIn], indicator_ids: Sequence[str]) -> list[PickSnapshot]:

@@ -4,7 +4,7 @@ from datetime import date, timedelta
 from unittest.mock import patch
 
 from stock_server.backtest import RANK_MODE_STOP_LOSS_LOSS, run_backtest
-from stock_server.schemas import BacktestRequest, DailyQuoteIn, MarketBoard, StockPickOut
+from stock_server.schemas import BacktestRequest, DailyQuoteIn, MarketBoard, MinuteTrade, StockPickOut
 from stock_server.service import BACKTEST_PROFILES, build_backtest_picks, run_backtest_experiment
 
 
@@ -16,7 +16,7 @@ class JiaBanBacktestTest(unittest.TestCase):
         rows = sandwich_history("600000")
         rows.extend(
             [
-                quote("2024-05-01", previous_close=10.6, open_price=10.4, high=10.4, low=10.0, close=10.1),
+                quote("2024-05-01", previous_close=10.6, open_price=10.4, high=10.4, low=10.0, close=10.1, volume=800),
                 quote("2024-05-02", previous_close=10.1, open_price=10.2, high=10.5, low=10.1, close=10.3),
                 quote("2024-05-03", previous_close=10.3, open_price=10.4, high=11.1, low=10.2, close=10.9),
                 quote("2024-05-06", previous_close=10.9, open_price=10.8, high=10.9, low=10.5, close=10.7),
@@ -38,13 +38,56 @@ class JiaBanBacktestTest(unittest.TestCase):
         self.assertEqual([pick.code for pick in picks], ["600000"])
         self.assertEqual(picks[0].limit_shape, "jia_ban")
         self.assertEqual(picks[0].stop_loss_price, 10.0)
+        self.assertEqual(picks[0].target_price, 11.4)
+
+    def test_jia_ban_selector_filters_box_amplitude_above_15_percent(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        create_schema(conn)
+        rows = sandwich_history("600000", top_line=11.6)
+        rows.append(quote("2024-05-01", previous_close=10.6, open_price=10.4, high=10.4, low=10.0, close=10.1, volume=800))
+        from stock_server import repository
+
+        repository.upsert_daily_quotes(conn, rows)
+
+        picks = build_backtest_picks(
+            conn,
+            start_date="2024-05-01",
+            end_date="2024-05-01",
+            indicator_ids=[],
+            holding_days=3,
+            profile=BACKTEST_PROFILES["jia_ban"],
+        )
+
+        self.assertEqual(picks, [])
 
     def test_jia_ban_selector_filters_t_day_drop_over_7_percent(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         create_schema(conn)
         rows = sandwich_history("600000")
-        rows.append(quote("2024-05-01", previous_close=11.0, open_price=10.5, high=10.5, low=10.0, close=10.1))
+        rows.append(quote("2024-05-01", previous_close=11.0, open_price=10.5, high=10.5, low=10.0, close=10.1, volume=800))
+        from stock_server import repository
+
+        repository.upsert_daily_quotes(conn, rows)
+
+        picks = build_backtest_picks(
+            conn,
+            start_date="2024-05-01",
+            end_date="2024-05-01",
+            indicator_ids=[],
+            holding_days=3,
+            profile=BACKTEST_PROFILES["jia_ban"],
+        )
+
+        self.assertEqual(picks, [])
+
+    def test_jia_ban_selector_requires_stage_low_volume(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        create_schema(conn)
+        rows = sandwich_history("600000")
+        rows.append(quote("2024-05-01", previous_close=10.6, open_price=10.4, high=10.4, low=10.0, close=10.1, volume=2200))
         from stock_server import repository
 
         repository.upsert_daily_quotes(conn, rows)
@@ -102,7 +145,30 @@ class JiaBanBacktestTest(unittest.TestCase):
         self.assertEqual(result.total_trades, 1)
         self.assertEqual(result.trades[0].sell_date, "2024-03-05")
         self.assertEqual(result.trades[0].sell_price, 9.7)
-        self.assertIn("收盘价", result.trades[0].exit_reason)
+        self.assertIn("止损", result.trades[0].exit_reason)
+
+    def test_jia_ban_strategy_takes_profit_at_box_top(self):
+        result = run_backtest(
+            picks=[
+                stock_pick(
+                    "600000",
+                    stop_loss_price=10.0,
+                    target_price=10.6,
+                    future_opens=[10.2, 10.3, 10.4],
+                    future_highs=[10.4, 10.7, 10.8],
+                    future_lows=[10.1, 10.2, 10.3],
+                    future_closes=[10.3, 10.5, 10.6],
+                )
+            ],
+            holding_days=3,
+            take_profit_percent=50.0,
+            strategy_id="jia_ban",
+        )
+
+        self.assertEqual(result.total_trades, 1)
+        self.assertEqual(result.trades[0].sell_date, "2024-03-05")
+        self.assertEqual(result.trades[0].sell_price, 10.6)
+        self.assertIn("上轨", result.trades[0].exit_reason)
 
     def test_jia_ban_strategy_does_not_stop_loss_on_buy_day(self):
         result = run_backtest(
@@ -222,12 +288,12 @@ def create_schema(conn: sqlite3.Connection) -> None:
     )
 
 
-def sandwich_history(code: str) -> list[DailyQuoteIn]:
+def sandwich_history(code: str, top_line: float = 11.4) -> list[DailyQuoteIn]:
     start = date(2024, 1, 1)
     rows: list[DailyQuoteIn] = []
     for index in range(120):
         trade_date = (start + timedelta(days=index)).isoformat()
-        high = 12.0 if index in (10, 90) else 11.4
+        high = top_line if index in (10, 90) else 11.1
         low = 10.0 if index in (5, 80) else 10.3
         rows.append(
             quote(
@@ -238,6 +304,7 @@ def sandwich_history(code: str) -> list[DailyQuoteIn]:
                 low=low,
                 close=11.0,
                 code=code,
+                volume=2000,
             )
         )
     return rows
@@ -251,6 +318,7 @@ def quote(
     low: float,
     close: float,
     code: str = "600000",
+    volume: int = 2000,
 ) -> DailyQuoteIn:
     return DailyQuoteIn(
         trade_date=trade_date,
@@ -266,7 +334,7 @@ def quote(
         turnover_rate=10.0,
         total_mv_wan=100000.0,
         sealed_amount_wan=0.0,
-        minute_trades=[],
+        minute_trades=[MinuteTrade(minute="daily", price=close, volume=volume)],
     )
 
 
@@ -278,6 +346,7 @@ def stock_pick(
     future_lows: list[float] | None = None,
     future_closes: list[float] | None = None,
     future_dates: list[str] | None = None,
+    target_price: float = 0.0,
 ) -> StockPickOut:
     return StockPickOut(
         trade_date="2024-03-01",
@@ -293,6 +362,7 @@ def stock_pick(
         total_mv_wan=100000.0,
         sealed_amount_wan=0.0,
         stop_loss_price=stop_loss_price,
+        target_price=target_price,
         limit_shape="jia_ban",
         limit_shape_label="夹板战法",
         latest_trade_date=None,

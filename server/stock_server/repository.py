@@ -120,6 +120,7 @@ def load_daily_quotes_between(
     conn: sqlite3.Connection,
     start_date: str | None,
     end_date: str | None,
+    include_minute_trades: bool = False,
 ) -> list[DailyQuoteIn]:
     rows = conn.execute(
         """
@@ -131,7 +132,25 @@ def load_daily_quotes_between(
         """,
         (start_date, start_date, end_date, end_date),
     ).fetchall()
-    return [row_to_quote(row, []) for row in rows]
+    if not include_minute_trades:
+        return [row_to_quote(row, []) for row in rows]
+
+    minute_rows = conn.execute(
+        """
+        SELECT trade_date, code, minute, price, volume
+        FROM minute_trades
+        WHERE (? IS NULL OR trade_date >= ?)
+          AND (? IS NULL OR trade_date <= ?)
+        ORDER BY trade_date ASC, code ASC, minute ASC
+        """,
+        (start_date, start_date, end_date, end_date),
+    ).fetchall()
+    minutes_by_quote: dict[tuple[str, str], list[MinuteTrade]] = {}
+    for item in minute_rows:
+        minutes_by_quote.setdefault((item["trade_date"], item["code"]), []).append(
+            MinuteTrade(minute=item["minute"], price=item["price"], volume=item["volume"])
+        )
+    return [row_to_quote(row, minutes_by_quote.get((row["trade_date"], row["code"]), [])) for row in rows]
 
 
 def count_quotes(conn: sqlite3.Connection, trade_date: str) -> int:

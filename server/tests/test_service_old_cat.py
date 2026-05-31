@@ -258,8 +258,9 @@ class OldCatSelectionTest(unittest.TestCase):
         strategy_ids = {item.strategy_id for item in result.items}
         self.assertIn("old_cat", strategy_ids)
         self.assertIn("old_cat_selection_aligned", strategy_ids)
-        self.assertIn("old_cat_selection_aligned_8pct", strategy_ids)
         self.assertNotIn("old_cat_afternoon_limit", strategy_ids)
+        self.assertNotIn("old_cat_selection_aligned_8pct", strategy_ids)
+        self.assertNotIn("old_cat_stop_loss_rank", strategy_ids)
         self.assertNotIn("b1", strategy_ids)
         self.assertNotIn("old_cat_timely_stop_loss", strategy_ids)
 

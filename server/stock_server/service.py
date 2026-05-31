@@ -43,7 +43,14 @@ B1_N_SHAPE_LOOKBACK_DAYS = 60
 JIA_BAN_LOOKBACK_DAYS = 240
 JIA_BAN_MIN_HISTORY_DAYS = 120
 JIA_BAN_LINE_TOLERANCE = 0.02
+JIA_BAN_MAX_BOX_AMPLITUDE = 0.15
 JIA_BAN_MAX_T_DAY_DROP_PERCENT = 7.0
+OLD_CAT_LIMIT2_LOOKBACK_DAYS = 30
+OLD_CAT_LIMIT2_FIRST_BOARD_VOLUME_LOOKBACK = 5
+OLD_CAT_LIMIT2_FIRST_BOARD_VOLUME_RATIO = 1.2
+OLD_CAT_LIMIT2_PULLBACK_MAX_DROP_PERCENT = 5.0
+OLD_CAT_LIMIT2_PULLBACK_VOLUME_RATIO = 0.70
+OLD_CAT_LIMIT2_PULLBACK_MAX_BODY_PERCENT = 3.0
 
 
 @dataclass(frozen=True)
@@ -123,7 +130,7 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
     "jia_ban": BacktestProfile(
         id="jia_ban",
         name="夹板战法",
-        description="六个月箱体内有顶有底，允许 2% 突破；T 日收盘接近底部线且跌幅不超过 7%，T+1 开盘买入；跌破底部线止损，止盈率和持有天数按回测参数执行。",
+        description="近 120 个交易日构建六个月箱体，箱体振幅不超过 15%；T 日收盘回踩下轨且成交量为阶段地量，跌幅不超过 7%；T+1 开盘买入，反弹到上轨或达到回测止盈率卖出，跌破下轨止损。",
         first_limit_only=False,
         exclude_st=True,
         engine_strategy_id="jia_ban",
@@ -131,6 +138,19 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         selector="jia_ban",
         lookback_days=JIA_BAN_LOOKBACK_DAYS,
         min_history_days=JIA_BAN_MIN_HISTORY_DAYS,
+        max_positions_per_day=3,
+    ),
+    "old_cat_limit2": BacktestProfile(
+        id="old_cat_limit2",
+        name="老猫涨停2对比",
+        description="第一板放量涨停后连续 2 个交易日缩量夹板回调，回调不跌破第一板开盘价、不再涨停且单日跌幅不超 5%；随后第二板放量涨停确认，次日开盘买入，跌破第一板开盘价止损，止盈率和持有天数沿用 APP 参数。",
+        first_limit_only=False,
+        exclude_st=True,
+        engine_strategy_id="old_cat_limit2",
+        rank_mode=RANK_MODE_STOP_LOSS_LOSS,
+        selector="old_cat_limit2",
+        lookback_days=OLD_CAT_LIMIT2_LOOKBACK_DAYS,
+        min_history_days=OLD_CAT_LIMIT2_FIRST_BOARD_VOLUME_LOOKBACK,
         max_positions_per_day=3,
     ),
     "b1": BacktestProfile(
@@ -294,7 +314,7 @@ def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> Ba
 
 
 def run_backtest_experiment(conn: sqlite3.Connection, request: BacktestRequest) -> BacktestExperimentOut:
-    excluded_profile_ids = {"b1", "old_cat_timely_stop_loss"}
+    excluded_profile_ids = {"b1", "old_cat_timely_stop_loss", "old_cat_selection_aligned_8pct", "old_cat_stop_loss_rank"}
     experiment_profiles = [profile for profile in BACKTEST_PROFILES.values() if profile.id not in excluded_profile_ids]
     max_lookback_days = max((profile.lookback_days for profile in experiment_profiles), default=0)
     max_min_history_days = max((profile.min_history_days for profile in experiment_profiles), default=0)
@@ -458,6 +478,16 @@ def build_backtest_picks(
             profile,
             allow_below_market_ma25,
         )
+    if profile is not None and profile.selector == "old_cat_limit2":
+        return build_old_cat_limit2_backtest_picks(
+            conn,
+            start_date,
+            end_date,
+            holding_days,
+            board,
+            profile,
+            allow_below_market_ma25,
+        )
     if profile is not None and profile.selector == "old_cat_selection_aligned":
         return build_old_cat_selection_aligned_backtest_picks(
             conn,
@@ -524,7 +554,7 @@ def build_jia_ban_backtest_picks(
     load_start = date_days_before(selected_start, profile.lookback_days) if profile.lookback_days > 0 else selected_start
 
     quotes_by_code: dict[str, list[DailyQuoteIn]] = {}
-    for quote in repository.load_daily_quotes_between(conn, load_start, selected_end):
+    for quote in repository.load_daily_quotes_between(conn, load_start, selected_end, include_minute_trades=True):
         if board and quote.board.value != board:
             continue
         quotes_by_code.setdefault(quote.code, []).append(quote)
@@ -580,22 +610,24 @@ def matches_jia_ban_conditions(
     bottom_line = min(item.low for item in history)
     if bottom_line <= 0 or top_line <= bottom_line:
         return False
+    if (top_line - bottom_line) / bottom_line > JIA_BAN_MAX_BOX_AMPLITUDE:
+        return False
 
     lower_limit = bottom_line * (1.0 - JIA_BAN_LINE_TOLERANCE)
-    upper_limit = top_line * (1.0 + JIA_BAN_LINE_TOLERANCE)
-    if any(item.low < lower_limit or item.high > upper_limit for item in history):
+    if not lower_limit <= quote.close <= bottom_line * (1.0 + JIA_BAN_LINE_TOLERANCE):
         return False
 
-    bottom_touches = sum(1 for item in history if item.low <= bottom_line * (1.0 + JIA_BAN_LINE_TOLERANCE))
-    top_touches = sum(1 for item in history if item.high >= top_line * (1.0 - JIA_BAN_LINE_TOLERANCE))
-    if bottom_touches < 2 or top_touches < 2:
+    current_volume = quote_volume(quote)
+    history_volumes = [quote_volume(item) for item in history]
+    valid_history_volumes = [volume for volume in history_volumes if volume > 0]
+    if current_volume <= 0 or not valid_history_volumes:
         return False
-
-    return lower_limit <= quote.close <= bottom_line * (1.0 + JIA_BAN_LINE_TOLERANCE)
+    return current_volume <= min(valid_history_volumes)
 
 
 def jia_ban_snapshot(quote: DailyQuoteIn, history: Sequence[DailyQuoteIn]) -> PickSnapshot:
     bottom_line = min(item.low for item in history)
+    top_line = max(item.high for item in history)
     return PickSnapshot(
         trade_date=quote.trade_date,
         code=quote.code,
@@ -613,7 +645,151 @@ def jia_ban_snapshot(quote: DailyQuoteIn, history: Sequence[DailyQuoteIn]) -> Pi
         limit_shape_label="夹板战法",
         next_open=quote.next_open,
         future_closes=quote.future_closes,
+        target_price=top_line,
     )
+
+
+def build_old_cat_limit2_backtest_picks(
+    conn: sqlite3.Connection,
+    start_date: str | None,
+    end_date: str | None,
+    holding_days: int,
+    board: str | None,
+    profile: BacktestProfile,
+    allow_below_market_ma25: bool,
+) -> list[StockPickOut]:
+    selected_end = end_date or repository.latest_quote_date(conn)
+    if not selected_end:
+        return []
+    selected_start = start_date or date_days_before(selected_end, DEFAULT_SYNC_DAYS)
+    load_start = date_days_before(selected_start, profile.lookback_days) if profile.lookback_days > 0 else selected_start
+
+    quotes_by_code: dict[str, list[DailyQuoteIn]] = {}
+    for quote in repository.load_daily_quotes_between(conn, load_start, selected_end, include_minute_trades=True):
+        if board and quote.board.value != board:
+            continue
+        quotes_by_code.setdefault(quote.code, []).append(quote)
+
+    snapshots: list[PickSnapshot] = []
+    for quotes in quotes_by_code.values():
+        snapshots.extend(old_cat_limit2_snapshots_for_code(quotes, start_date, end_date, profile))
+
+    if not allow_below_market_ma25:
+        snapshots = [snapshot for snapshot in snapshots if market_above_ma25(conn, snapshot.trade_date)]
+
+    snapshots.sort(key=lambda item: (item.trade_date, item.board.value, item.code))
+    pick_holding_days = max(holding_days, 1)
+    return [snapshot_to_pick(conn, snapshot, pick_holding_days) for snapshot in snapshots]
+
+
+def old_cat_limit2_snapshots_for_code(
+    quotes: Sequence[DailyQuoteIn],
+    start_date: str | None,
+    end_date: str | None,
+    profile: BacktestProfile,
+) -> list[PickSnapshot]:
+    sorted_quotes = sorted(quotes, key=lambda item: item.trade_date)
+    result: list[PickSnapshot] = []
+    start_index = OLD_CAT_LIMIT2_FIRST_BOARD_VOLUME_LOOKBACK + 3
+    for second_index in range(start_index, len(sorted_quotes)):
+        second_board = sorted_quotes[second_index]
+        if not in_date_range(second_board.trade_date, start_date, end_date):
+            continue
+        first_index = second_index - 3
+        first_board = sorted_quotes[first_index]
+        pullbacks = sorted_quotes[first_index + 1 : second_index]
+        first_history = sorted_quotes[first_index - OLD_CAT_LIMIT2_FIRST_BOARD_VOLUME_LOOKBACK : first_index]
+        previous_quote = sorted_quotes[first_index - 1]
+        if matches_old_cat_limit2_conditions(first_board, pullbacks, second_board, first_history, previous_quote, profile):
+            result.append(old_cat_limit2_snapshot(first_board, second_board))
+    return result
+
+
+def matches_old_cat_limit2_conditions(
+    first_board: DailyQuoteIn,
+    pullbacks: Sequence[DailyQuoteIn],
+    second_board: DailyQuoteIn,
+    first_history: Sequence[DailyQuoteIn],
+    previous_quote: DailyQuoteIn,
+    profile: BacktestProfile,
+) -> bool:
+    if first_board.board not in (MarketBoard.main, MarketBoard.chinext):
+        return False
+    if profile.exclude_st and is_st_stock(first_board.name):
+        return False
+    if len(pullbacks) != 2 or len(first_history) < OLD_CAT_LIMIT2_FIRST_BOARD_VOLUME_LOOKBACK:
+        return False
+    if old_cat_limit2_is_limit_up(previous_quote):
+        return False
+    if not old_cat_limit2_is_limit_up(first_board) or not old_cat_limit2_is_limit_up(second_board):
+        return False
+
+    first_volume = quote_volume(first_board)
+    history_volumes = [quote_volume(item) for item in first_history]
+    valid_history_volumes = [volume for volume in history_volumes if volume > 0]
+    if first_volume <= 0 or len(valid_history_volumes) < OLD_CAT_LIMIT2_FIRST_BOARD_VOLUME_LOOKBACK:
+        return False
+    if first_volume < (sum(valid_history_volumes) / len(valid_history_volumes)) * OLD_CAT_LIMIT2_FIRST_BOARD_VOLUME_RATIO:
+        return False
+
+    if first_board.open <= 0 or first_board.close <= first_board.open:
+        return False
+
+    pullback_volumes = [quote_volume(item) for item in pullbacks]
+    if any(volume <= 0 or volume >= first_volume * OLD_CAT_LIMIT2_PULLBACK_VOLUME_RATIO for volume in pullback_volumes):
+        return False
+    if pullback_volumes[1] >= pullback_volumes[0]:
+        return False
+
+    for quote in pullbacks:
+        if old_cat_limit2_is_limit_up(quote):
+            return False
+        if old_cat_limit2_daily_change_percent(quote) < -OLD_CAT_LIMIT2_PULLBACK_MAX_DROP_PERCENT:
+            return False
+        if quote.low < first_board.open - 0.02 or quote.high > first_board.close + 0.02:
+            return False
+        if quote.previous_close <= 0:
+            return False
+        body_percent = abs(quote.close - quote.open) / quote.previous_close * 100.0
+        if body_percent > OLD_CAT_LIMIT2_PULLBACK_MAX_BODY_PERCENT:
+            return False
+
+    second_volume = quote_volume(second_board)
+    return second_volume > pullback_volumes[-1]
+
+
+def old_cat_limit2_snapshot(first_board: DailyQuoteIn, second_board: DailyQuoteIn) -> PickSnapshot:
+    return PickSnapshot(
+        trade_date=second_board.trade_date,
+        code=second_board.code,
+        name=second_board.name,
+        board=second_board.board,
+        concept=second_board.concept,
+        close=second_board.close,
+        change_percent=old_cat_limit2_daily_change_percent(second_board),
+        volume_ratio=second_board.volume_ratio,
+        turnover_rate=second_board.turnover_rate,
+        total_mv_wan=second_board.total_mv_wan,
+        sealed_amount_wan=second_board.sealed_amount_wan,
+        stop_loss_price=first_board.open,
+        limit_shape="old_cat_limit2",
+        limit_shape_label="老猫涨停2对比",
+        next_open=second_board.next_open,
+        future_closes=second_board.future_closes,
+    )
+
+
+def old_cat_limit2_is_limit_up(quote: DailyQuoteIn) -> bool:
+    if quote.previous_close <= 0:
+        return False
+    expected = quote.previous_close * (1.0 + quote.board.limit_up_rate)
+    return quote.close >= expected - 0.02 and quote.close >= quote.high - 0.02
+
+
+def old_cat_limit2_daily_change_percent(quote: DailyQuoteIn) -> float:
+    if quote.previous_close <= 0:
+        return 0.0
+    return (quote.close - quote.previous_close) / quote.previous_close * 100.0
 
 
 def build_b1_backtest_picks(
@@ -905,6 +1081,7 @@ def snapshot_to_pick(
         total_mv_wan=snapshot.total_mv_wan,
         sealed_amount_wan=snapshot.sealed_amount_wan,
         stop_loss_price=snapshot.stop_loss_price,
+        target_price=snapshot.target_price,
         limit_shape=snapshot.limit_shape,
         limit_shape_label=snapshot.limit_shape_label,
         latest_trade_date=latest["trade_date"] if latest else None,

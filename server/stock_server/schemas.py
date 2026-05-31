@@ -71,6 +71,7 @@ class StockPickOut(BaseModel):
     total_mv_wan: float = 0.0
     sealed_amount_wan: float
     stop_loss_price: float
+    target_price: float = 0.0
     limit_shape: str = ""
     limit_shape_label: str = ""
     latest_trade_date: Optional[str] = None
