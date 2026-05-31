@@ -354,7 +354,7 @@ class OldCatSelectionTest(unittest.TestCase):
             volume_ratio_min=0.5,
         )
 
-        self.assertEqual([pick.trade_date for pick in default_picks], ["2024-05-10"])
+        self.assertEqual(default_picks, [])
         self.assertEqual(override_picks, [])
 
     def test_backtest_experiment_excludes_single_entry_and_stop_price_sell_strategies(self):
@@ -427,7 +427,7 @@ def quote(
     code: str = "600000",
     name: str = "Sample Equity",
     sealed_amount_wan: float = 6000.0,
-    volume_ratio: float = 2.0,
+    volume_ratio: float = 2.5,
     minute_trades: list[MinuteTrade] | None = None,
 ) -> DailyQuoteIn:
     return DailyQuoteIn(

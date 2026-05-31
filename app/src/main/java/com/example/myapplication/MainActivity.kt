@@ -575,7 +575,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
     var holdingDays by remember { mutableIntStateOf(3) }
     var maxPositionsPerDay by remember { mutableIntStateOf(3) }
     var takeProfitText by remember { mutableStateOf("10") }
-    var volumeRatioText by remember { mutableStateOf("1.8") }
+    var volumeRatioText by remember { mutableStateOf("2") }
     var allowBelowMarketMa25 by remember { mutableStateOf(true) }
     var boardFilter by remember { mutableStateOf(PickBoardFilter.All) }
     var selectedStrategy by remember { mutableStateOf(BacktestStrategy.OldCat) }
@@ -772,7 +772,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
                     startDate = entry.startDate
                     endDate = entry.endDate
                     holdingDays = entry.holdingDays
-                    volumeRatioText = entry.volumeRatioMin?.let { trimDoubleText(it) } ?: "1.8"
+                    volumeRatioText = entry.volumeRatioMin?.let { trimDoubleText(it) } ?: "2"
                     selectedStrategy = BacktestStrategy.values().firstOrNull { it.id == entry.strategyId } ?: BacktestStrategy.OldCat
                     boardFilter = when (entry.board) {
                         MarketBoard.Main -> PickBoardFilter.Main
@@ -1742,7 +1742,7 @@ private fun BacktestControls(
                 value = volumeRatioText,
                 onValueChange = { raw -> onVolumeRatio(raw.filter { it.isDigit() || it == '.' }.take(4)) },
                 label = { Text("回测量比放大") },
-                supportingText = { Text("仅覆盖回测里的量比指标，选股页仍使用默认 1.8") },
+                supportingText = { Text("默认按量比大于 2 过滤，选股页也使用同一阈值") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth()

@@ -214,7 +214,7 @@ object IndicatorCatalog {
         IndicatorOption(
             id = "volume",
             name = "量比放大",
-            description = "量比大于 1.8，过滤成交活跃度不足的涨停。"
+            description = "量比大于 2，过滤成交活跃度不足的涨停。"
         ),
         IndicatorOption(
             id = "seal",
@@ -282,7 +282,7 @@ object StockSelectionEngine {
     private fun StockDay.matchesIndicators(ids: Set<String>): Boolean {
         return ids.all { id ->
             when (id) {
-                "volume" -> volumeRatio >= 1.8
+                "volume" -> volumeRatio > 2.0
                 "seal" -> sealedAmountWan >= 5000.0
                 "turnover" -> turnoverRate in 4.0..28.0
                 "close" -> close >= high * 0.995
