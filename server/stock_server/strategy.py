@@ -95,7 +95,9 @@ def matches_indicators(
 ) -> bool:
     effective_volume_ratio_min = volume_ratio_min if volume_ratio_min is not None else DEFAULT_VOLUME_RATIO_MIN
     for indicator_id in indicator_ids:
-        if indicator_id == "volume" and 0.0 < quote.volume_ratio < effective_volume_ratio_min:
+        if indicator_id == "volume" and volume_ratio_min is not None and quote.volume_ratio < effective_volume_ratio_min:
+            return False
+        if indicator_id == "volume" and volume_ratio_min is None and 0.0 < quote.volume_ratio < effective_volume_ratio_min:
             return False
         if indicator_id == "seal" and 0.0 < quote.sealed_amount_wan < 5000.0:
             return False
