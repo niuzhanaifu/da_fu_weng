@@ -18,7 +18,7 @@ sed -i "/${MARKER_START}/,/${MARKER_END}/d" "${tmp_cron}"
 
 cat >> "${tmp_cron}" <<EOF
 ${MARKER_START}
-${SYNC_MINUTE} ${SYNC_HOUR} * * 1-5 cd ${APP_DIR} && { echo "[\$(date '+\\%F \\%T \\%Z')] daily sync start"; . .venv/bin/activate && set -a && . .env && set +a && python -m stock_server.jobs sync-tushare --start-date \$(date +\\%F) --end-date \$(date +\\%F) && python -m stock_server.jobs run-daily-selection --date \$(date +\\%F); status=\$?; echo "[\$(date '+\\%F \\%T \\%Z')] daily sync finished status=\${status}"; exit \${status}; } >> logs/cron.log 2>&1
+${SYNC_MINUTE} ${SYNC_HOUR} * * 1-5 cd ${APP_DIR} && { echo "[\$(date '+\\%F \\%T \\%Z')] daily sync start"; . .venv/bin/activate && set -a && . ./.env && set +a && python -m stock_server.jobs sync-tushare --start-date \$(date +\\%F) --end-date \$(date +\\%F) && python -m stock_server.jobs run-daily-selection --date \$(date +\\%F); status=\$?; echo "[\$(date '+\\%F \\%T \\%Z')] daily sync finished status=\${status}"; exit \${status}; } >> logs/cron.log 2>&1
 ${MARKER_END}
 EOF
 

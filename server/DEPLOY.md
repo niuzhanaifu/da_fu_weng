@@ -128,14 +128,14 @@ sudo systemctl status dafuweng-stock
 ```bash
 cd ~/codebase/da_fu_weng/server
 . .venv/bin/activate
-set -a && . .env && set +a
+set -a && . ./.env && set +a
 python -m stock_server.jobs sync-tushare --start-date 2026-05-15 --end-date 2026-05-15
 ```
 
 命令说明：
 
 - `. .venv/bin/activate`：启用 Python 虚拟环境。
-- `set -a && . .env && set +a`：读取 `.env` 中的 `TUSHARE_TOKEN`、管理口令等环境变量。
+- `set -a && . ./.env && set +a`：读取 `.env` 中的 `TUSHARE_TOKEN`、管理口令等环境变量。
 - `python -m stock_server.jobs sync-tushare --start-date ... --end-date ...`：从 Tushare 下载指定日期范围内的日线数据并保存到 SQLite。
 
 补最近三个月数据：
@@ -143,7 +143,7 @@ python -m stock_server.jobs sync-tushare --start-date 2026-05-15 --end-date 2026
 ```bash
 cd ~/codebase/da_fu_weng/server
 . .venv/bin/activate
-set -a && . .env && set +a
+set -a && . ./.env && set +a
 python -m stock_server.jobs sync-tushare --start-date $(date -d '3 months ago' +%F) --end-date $(date +%F)
 ```
 
@@ -154,7 +154,7 @@ python -m stock_server.jobs sync-tushare --start-date $(date -d '3 months ago' +
 ```bash
 cd ~/codebase/da_fu_weng/server
 . .venv/bin/activate
-set -a && . .env && set +a
+set -a && . ./.env && set +a
 python -m stock_server.jobs sync-tushare --start-date $(date -d '1 year ago' +%F) --end-date $(date +%F)
 ```
 
@@ -165,7 +165,7 @@ python -m stock_server.jobs sync-tushare --start-date $(date -d '1 year ago' +%F
 `deploy.sh` 会安装每天 17:00 的定时任务：
 
 ```cron
-0 17 * * 1-5 cd ~/codebase/da_fu_weng/server && . .venv/bin/activate && set -a && . .env && set +a && python -m stock_server.jobs sync-tushare --start-date $(date +\%F) --end-date $(date +\%F) && python -m stock_server.jobs run-daily-selection --date $(date +\%F) >> logs/cron.log 2>&1
+0 17 * * 1-5 cd ~/codebase/da_fu_weng/server && . .venv/bin/activate && set -a && . ./.env && set +a && python -m stock_server.jobs sync-tushare --start-date $(date +\%F) --end-date $(date +\%F) && python -m stock_server.jobs run-daily-selection --date $(date +\%F) >> logs/cron.log 2>&1
 ```
 
 命令说明：
@@ -219,7 +219,7 @@ curl -X POST http://14.103.183.47:8000/api/v1/backtests \
 ```bash
 cd ~/codebase/da_fu_weng/server
 . .venv/bin/activate
-set -a && . .env && set +a
+set -a && . ./.env && set +a
 python -m stock_server.jobs clear-derived-data
 ```
 

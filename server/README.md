@@ -193,7 +193,7 @@ curl -X POST "http://127.0.0.1:8000/api/v1/admin/run-daily-selection?trade_date=
 部署脚本会自动安装 crontab，交易日 17:00 同步当天数据并执行当天选股：
 
 ```cron
-0 17 * * 1-5 cd /opt/dafuweng/server && . .venv/bin/activate && set -a && . .env && set +a && python -m stock_server.jobs sync-tushare --start-date $(date +\%F) --end-date $(date +\%F) && python -m stock_server.jobs run-daily-selection --date $(date +\%F) >> logs/cron.log 2>&1
+0 17 * * 1-5 cd /opt/dafuweng/server && . .venv/bin/activate && set -a && . ./.env && set +a && python -m stock_server.jobs sync-tushare --start-date $(date +\%F) --end-date $(date +\%F) && python -m stock_server.jobs run-daily-selection --date $(date +\%F) >> logs/cron.log 2>&1
 ```
 
 ## systemd 部署
