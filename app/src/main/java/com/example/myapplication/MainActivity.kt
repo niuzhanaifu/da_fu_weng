@@ -1823,7 +1823,7 @@ private fun BacktestExperimentCard(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("策略实验", color = Ink, fontWeight = FontWeight.Bold)
-                    Text("服务端一次回测多套老猫变体，按收益率排序。", color = Muted, fontSize = 12.sp)
+                    Text("服务端对比老猫战法与口径对齐，按收益率排序。", color = Muted, fontSize = 12.sp)
                 }
                 if (isRunning) {
                     CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 3.dp)

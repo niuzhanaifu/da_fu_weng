@@ -357,7 +357,7 @@ class OldCatSelectionTest(unittest.TestCase):
         self.assertEqual(default_picks, [])
         self.assertEqual(override_picks, [])
 
-    def test_backtest_experiment_excludes_single_entry_and_stop_price_sell_strategies(self):
+    def test_backtest_experiment_only_includes_old_cat_and_selection_aligned(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         create_schema(conn)
@@ -368,14 +368,16 @@ class OldCatSelectionTest(unittest.TestCase):
                 BacktestRequest(start_date="2024-05-10", end_date="2024-05-10"),
             )
 
-        strategy_ids = {item.strategy_id for item in result.items}
-        self.assertIn("old_cat", strategy_ids)
-        self.assertIn("old_cat_selection_aligned", strategy_ids)
+        strategy_ids = [item.strategy_id for item in result.items]
+        self.assertEqual(set(strategy_ids), {"old_cat", "old_cat_selection_aligned"})
+        self.assertEqual(len(strategy_ids), 2)
         self.assertNotIn("old_cat_afternoon_limit", strategy_ids)
         self.assertNotIn("old_cat_selection_aligned_8pct", strategy_ids)
         self.assertNotIn("old_cat_stop_loss_rank", strategy_ids)
         self.assertNotIn("b1", strategy_ids)
         self.assertNotIn("old_cat_timely_stop_loss", strategy_ids)
+        self.assertNotIn("jia_ban", strategy_ids)
+        self.assertNotIn("old_cat_limit2", strategy_ids)
 
 
 def create_schema(conn: sqlite3.Connection) -> None:

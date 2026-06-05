@@ -315,8 +315,8 @@ def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> Ba
 
 
 def run_backtest_experiment(conn: sqlite3.Connection, request: BacktestRequest) -> BacktestExperimentOut:
-    excluded_profile_ids = {"b1", "old_cat_timely_stop_loss", "old_cat_selection_aligned_8pct", "old_cat_stop_loss_rank"}
-    experiment_profiles = [profile for profile in BACKTEST_PROFILES.values() if profile.id not in excluded_profile_ids]
+    experiment_profile_ids = ("old_cat", "old_cat_selection_aligned")
+    experiment_profiles = [BACKTEST_PROFILES[profile_id] for profile_id in experiment_profile_ids]
     max_lookback_days = max((profile.lookback_days for profile in experiment_profiles), default=0)
     max_min_history_days = max((profile.min_history_days for profile in experiment_profiles), default=0)
     ensure_quotes_for_backtest(conn, request.start_date, request.end_date, max_lookback_days, max_min_history_days)

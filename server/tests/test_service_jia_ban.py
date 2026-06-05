@@ -235,7 +235,7 @@ class JiaBanBacktestTest(unittest.TestCase):
         self.assertEqual(result.total_trades, 3)
         self.assertEqual({trade.code for trade in result.trades}, {"600000", "600001", "600002"})
 
-    def test_backtest_experiment_includes_jia_ban(self):
+    def test_backtest_experiment_excludes_jia_ban(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         create_schema(conn)
@@ -246,7 +246,7 @@ class JiaBanBacktestTest(unittest.TestCase):
                 BacktestRequest(start_date="2024-03-01", end_date="2024-03-01"),
             )
 
-        self.assertIn("jia_ban", {item.strategy_id for item in result.items})
+        self.assertNotIn("jia_ban", {item.strategy_id for item in result.items})
 
 
 def create_schema(conn: sqlite3.Connection) -> None:

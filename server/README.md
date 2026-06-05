@@ -96,7 +96,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/backtests \
 命令说明：
 
 - `POST /api/v1/backtests`：运行回测，结果直接返回，不保存回测结果。
-- `strategy_id`：回测战法 ID，正式战法是 `old_cat`，策略对比接口会额外返回多个老猫对照策略。
+- `strategy_id`：回测战法 ID，正式战法是 `old_cat`，策略对比接口会额外返回 `old_cat_selection_aligned` 口径对齐对照策略。
 - `holding_days`：买入后最多持有交易日数量。
 - 初始资金：默认 100000 元，APP 端不再提供输入。
 - `max_positions_per_day`：每日最多同时买入股票数量，APP 默认 3，可由用户选择。
@@ -263,13 +263,11 @@ APP 触发 `/api/v1/selections/run` 时通过 `strategy_id` 选择服务端战�
 
 ## 策略对比
 
-APP 触发 `/api/v1/backtests/experiments` 时，服务端会同时跑多组互不重复的回测对比策略：
+APP 触发 `/api/v1/backtests/experiments` 时，服务端只跑老猫战法和老猫战法口径对齐：
 
 - `old_cat`：正式老猫战法，首板、早上封板、非 ST、非一字板；超过 3 只时按最近 5 个交易日累计涨幅最低优先买入。
 - `old_cat_selection_aligned`：老猫对照：选股口径对齐。T 日首板早上封板、非 ST、非一字板；按 T+1 收盘相对 T 日收盘涨幅不超过 5% 过滤；T+2 开盘价买入。
-- `jia_ban`：夹板战法。近 120 个交易日构建六个月箱体，上轨取最高价、下轨取最低价，箱体振幅不超过 15%；T 日收盘回踩下轨且成交量为阶段地量，跌幅不超过 7%；T+1 开盘买入，反弹到上轨或达到回测止盈率卖出，跌破下轨无条件止损；单日最多买入止损率最低的 3 只。
-- `old_cat_limit2`：老猫涨停2对比。第一板放量涨停后连续 2 个交易日缩量夹板回调，回调不跌破第一板开盘价、不再涨停且单日跌幅不超 5%；随后第二板放量涨停确认，次日开盘买入，跌破第一板开盘价止损，止盈率和持有天数沿用 APP 参数；单日最多买入止损率最低的 3 只。
 
 B1 战法保留单独回测入口，不参与策略对比实验。
 `old_cat_timely_stop_loss` 保留为内部回测策略，不参与策略对比实验。
-`old_cat_selection_aligned_8pct` 和 `old_cat_stop_loss_rank` 保留单独回测入口，不参与策略对比实验。
+`old_cat_selection_aligned_8pct`、`old_cat_stop_loss_rank`、`jia_ban` 和 `old_cat_limit2` 保留单独回测入口，不参与策略对比实验。
