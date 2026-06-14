@@ -32,6 +32,12 @@ def main() -> None:
     sync_parser.add_argument("--start-date", required=True)
     sync_parser.add_argument("--end-date", required=True)
 
+    diagnose_parser = subparsers.add_parser("diagnose-volume-ratio")
+    diagnose_parser.add_argument("--start-date", default="2026-06-02")
+    diagnose_parser.add_argument("--end-date", default=None)
+    diagnose_parser.add_argument("--threshold", type=float, default=2.0)
+    diagnose_parser.add_argument("--limit", type=int, default=50)
+
     csv_parser = subparsers.add_parser("import-csv")
     csv_parser.add_argument("path")
 
@@ -60,10 +66,105 @@ def main() -> None:
         elif args.command == "sync-tushare":
             count = sync_tushare_quotes(conn, args.start_date, args.end_date)
             print(f"synced {count} tushare quotes")
+        elif args.command == "diagnose-volume-ratio":
+            diagnose_volume_ratio(conn, args.start_date, args.end_date, args.threshold, args.limit)
         elif args.command == "import-csv":
             quotes = load_quotes_from_csv(Path(args.path))
             count = upsert_daily_quotes(conn, quotes)
             print(f"imported {count} quotes")
+
+
+def diagnose_volume_ratio(conn, start_date: str, end_date: str | None, threshold: float, limit: int) -> None:
+    params: list[object] = [start_date]
+    end_filter = ""
+    if end_date:
+        end_filter = " AND trade_date <= ?"
+        params.append(end_date)
+
+    print(f"date range: {start_date}..{end_date or 'latest'}")
+    print(f"volume ratio threshold: > {threshold}")
+
+    print("\n=== daily volume_ratio coverage ===")
+    coverage_sql = f"""
+        SELECT
+            trade_date,
+            COUNT(*) AS total,
+            SUM(CASE WHEN volume_ratio IS NULL OR volume_ratio <= 0 THEN 1 ELSE 0 END) AS no_ratio,
+            SUM(CASE WHEN volume_ratio > 0 THEN 1 ELSE 0 END) AS has_ratio,
+            SUM(CASE WHEN volume_ratio > ? THEN 1 ELSE 0 END) AS ratio_gt_threshold,
+            ROUND(AVG(CASE WHEN volume_ratio > 0 THEN volume_ratio END), 3) AS avg_ratio,
+            ROUND(MAX(volume_ratio), 3) AS max_ratio
+        FROM daily_quotes
+        WHERE trade_date >= ?{end_filter}
+        GROUP BY trade_date
+        ORDER BY trade_date
+    """
+    print_rows(conn.execute(coverage_sql, [threshold, *params]).fetchall())
+
+    print("\n=== limit-up non-one-word candidates ===")
+    candidates_sql = f"""
+        SELECT
+            trade_date,
+            COUNT(*) AS limit_candidates,
+            SUM(CASE WHEN volume_ratio IS NULL OR volume_ratio <= 0 THEN 1 ELSE 0 END) AS no_ratio,
+            SUM(CASE WHEN volume_ratio > 0 THEN 1 ELSE 0 END) AS has_ratio,
+            SUM(CASE WHEN volume_ratio > ? THEN 1 ELSE 0 END) AS ratio_gt_threshold,
+            ROUND(AVG(CASE WHEN volume_ratio > 0 THEN volume_ratio END), 3) AS avg_ratio,
+            ROUND(MAX(volume_ratio), 3) AS max_ratio
+        FROM daily_quotes
+        WHERE trade_date >= ?{end_filter}
+            AND board IN ('main', 'chinext')
+            AND close >= previous_close * CASE WHEN board = 'chinext' THEN 1.20 ELSE 1.10 END - 0.02
+            AND close >= high - 0.02
+            AND NOT (
+                ABS(open - close) <= 0.01
+                AND ABS(high - close) <= 0.01
+                AND ABS(low - close) <= 0.01
+            )
+        GROUP BY trade_date
+        ORDER BY trade_date
+    """
+    print_rows(conn.execute(candidates_sql, [threshold, *params]).fetchall())
+
+    print("\n=== blocked by volume_ratio threshold ===")
+    blocked_sql = f"""
+        SELECT
+            trade_date,
+            code,
+            name,
+            board,
+            ROUND(volume_ratio, 3) AS volume_ratio,
+            ROUND(turnover_rate, 3) AS turnover_rate,
+            ROUND(sealed_amount_wan, 1) AS sealed_amount_wan,
+            ROUND(close, 3) AS close
+        FROM daily_quotes
+        WHERE trade_date >= ?{end_filter}
+            AND board IN ('main', 'chinext')
+            AND close >= previous_close * CASE WHEN board = 'chinext' THEN 1.20 ELSE 1.10 END - 0.02
+            AND close >= high - 0.02
+            AND NOT (
+                ABS(open - close) <= 0.01
+                AND ABS(high - close) <= 0.01
+                AND ABS(low - close) <= 0.01
+            )
+            AND (volume_ratio IS NULL OR volume_ratio <= ?)
+        ORDER BY trade_date DESC, volume_ratio DESC, sealed_amount_wan DESC
+        LIMIT ?
+    """
+    print_rows(conn.execute(blocked_sql, [*params, threshold, limit]).fetchall())
+
+    print("\nHow to read:")
+    print("- no_ratio high: volume_ratio is missing or stored as 0.")
+    print("- has_ratio normal but ratio_gt_threshold low: data exists, but does not pass the threshold.")
+    print("- blocked rows are limit-up candidates that failed only this volume_ratio check.")
+
+
+def print_rows(rows) -> None:
+    if not rows:
+        print("(no rows)")
+        return
+    for row in rows:
+        print(dict(row))
 
 
 def load_quotes_from_csv(path: Path) -> list[DailyQuoteIn]:
