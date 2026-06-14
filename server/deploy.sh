@@ -153,28 +153,8 @@ EOF
 }
 
 install_daily_sync_cron() {
-  log "Installing daily Tushare sync cron at 17:30"
-  mkdir -p "${APP_DIR}/logs"
-
-  local marker_start="# dafu-weng daily-sync start"
-  local marker_end="# dafu-weng daily-sync end"
-  local cron_line="30 17 * * 1-5 cd ${APP_DIR} && { echo \"[\$(date '+\\%F \\%T \\%Z')] daily sync start\"; . .venv/bin/activate && set -a && . ./.env && set +a && python -m stock_server.jobs sync-tushare --start-date \$(date +\\%F) --end-date \$(date +\\%F) && python -m stock_server.jobs run-daily-selection --date \$(date +\\%F); status=\$?; echo \"[\$(date '+\\%F \\%T \\%Z')] daily sync finished status=\${status}\"; exit \${status}; } >> logs/cron.log 2>&1"
-  local current_cron
-
-  current_cron="$(mktemp)"
-  crontab -l > "${current_cron}" 2>/dev/null || true
-  sed -i "/${marker_start}/,/${marker_end}/d" "${current_cron}"
-  {
-    cat "${current_cron}"
-    echo "${marker_start}"
-    echo "${cron_line}"
-    echo "${marker_end}"
-  } | crontab -
-  rm -f "${current_cron}"
-
-  if command -v systemctl >/dev/null 2>&1; then
-    sudo systemctl enable --now cron 2>/dev/null || sudo systemctl enable --now crond 2>/dev/null || true
-  fi
+  log "Installing daily Tushare sync cron"
+  DAFUWENG_APP_DIR="${APP_DIR}" bash "${APP_DIR}/install_daily_sync_cron.sh"
 }
 
 health_check() {

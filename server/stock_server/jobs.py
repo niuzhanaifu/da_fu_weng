@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+from datetime import date, timedelta
 from pathlib import Path
 
 from .db import connect, init_db
@@ -38,6 +39,11 @@ def main() -> None:
     diagnose_parser.add_argument("--threshold", type=float, default=2.0)
     diagnose_parser.add_argument("--limit", type=int, default=50)
 
+    repair_parser = subparsers.add_parser("repair-volume-ratio")
+    repair_parser.add_argument("--start-date", default=None)
+    repair_parser.add_argument("--end-date", default=None)
+    repair_parser.add_argument("--lookback-days", type=int, default=10)
+
     csv_parser = subparsers.add_parser("import-csv")
     csv_parser.add_argument("path")
 
@@ -68,10 +74,26 @@ def main() -> None:
             print(f"synced {count} tushare quotes")
         elif args.command == "diagnose-volume-ratio":
             diagnose_volume_ratio(conn, args.start_date, args.end_date, args.threshold, args.limit)
+        elif args.command == "repair-volume-ratio":
+            repair_volume_ratio(conn, args.start_date, args.end_date, args.lookback_days)
         elif args.command == "import-csv":
             quotes = load_quotes_from_csv(Path(args.path))
             count = upsert_daily_quotes(conn, quotes)
             print(f"imported {count} quotes")
+
+
+def repair_volume_ratio(
+    conn,
+    start_date: str | None,
+    end_date: str | None,
+    lookback_days: int,
+) -> None:
+    selected_end = end_date or (date.today() - timedelta(days=1)).isoformat()
+    selected_start = start_date or (
+        date.fromisoformat(selected_end) - timedelta(days=max(lookback_days - 1, 0))
+    ).isoformat()
+    count = sync_tushare_quotes(conn, selected_start, selected_end)
+    print(f"repaired volume_ratio by syncing {count} tushare quotes from {selected_start} to {selected_end}")
 
 
 def diagnose_volume_ratio(conn, start_date: str, end_date: str | None, threshold: float, limit: int) -> None:

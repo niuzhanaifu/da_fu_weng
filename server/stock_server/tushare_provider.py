@@ -87,6 +87,12 @@ def fetch_daily_quotes_for_date(
             f"daily_basic returned too few rows for {from_tushare_date(ts_date)}: "
             f"{len(daily_basic_by_code)}/{len(daily_rows)}"
         )
+    volume_ratio_count = sum(1 for item in basic_rows if as_float(item.get("volume_ratio")) > 0)
+    if daily_rows and volume_ratio_count < len(daily_rows) * 0.8:
+        raise TushareError(
+            f"daily_basic volume_ratio returned too few valid rows for {from_tushare_date(ts_date)}: "
+            f"{volume_ratio_count}/{len(daily_rows)}"
+        )
 
     quotes: list[DailyQuoteIn] = []
     for row in daily_rows:
