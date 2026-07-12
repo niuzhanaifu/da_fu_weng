@@ -4,7 +4,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Sequence
+from typing import Any, Sequence
 
 from . import repository
 from .backtest import RANK_MODE_RECENT_5DAY_CHANGE, RANK_MODE_STOP_LOSS_LOSS, rank_daily_picks, run_backtest
@@ -51,6 +51,11 @@ OLD_CAT_LIMIT2_FIRST_BOARD_VOLUME_RATIO = 1.2
 OLD_CAT_LIMIT2_PULLBACK_MAX_DROP_PERCENT = 5.0
 OLD_CAT_LIMIT2_PULLBACK_VOLUME_RATIO = 0.70
 OLD_CAT_LIMIT2_PULLBACK_MAX_BODY_PERCENT = 3.0
+ULTRA_SHORT_LOOKBACK_DAYS = 360
+ULTRA_SHORT_MIN_HISTORY_DAYS = 114
+ULTRA_SHORT_LONG_WINDOW = 21
+ULTRA_SHORT_YELLOW_WINDOWS = (14, 28, 57, 114)
+ULTRA_SHORT_TURNOVER_MIN = 0.99
 
 
 @dataclass(frozen=True)
@@ -164,6 +169,17 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         selector="b1",
         lookback_days=B1_LOOKBACK_DAYS,
         min_history_days=B1_MIN_HISTORY_DAYS,
+    ),
+    "ultra_short": BacktestProfile(
+        id="ultra_short",
+        name="超短战法",
+        description="同时满足 ZXB1 砖形图共振和长阳放量条件；T+1 开盘买入，收益达到 10% 或持有满 3 个交易日卖出，收盘跌破买入价止损；忽略 APP 量比阈值。",
+        first_limit_only=False,
+        exclude_st=True,
+        engine_strategy_id="ultra_short",
+        selector="ultra_short",
+        lookback_days=ULTRA_SHORT_LOOKBACK_DAYS,
+        min_history_days=ULTRA_SHORT_MIN_HISTORY_DAYS,
     ),
 }
 
@@ -300,7 +316,7 @@ def run_saved_backtest(conn: sqlite3.Connection, request: BacktestRequest) -> Ba
         request.board.value if request.board else None,
         profile,
         request.allow_below_market_ma25,
-        request.volume_ratio_min,
+        backtest_volume_ratio_min(profile, request.volume_ratio_min),
     )
     return run_backtest(
         picks=picks,
@@ -331,7 +347,7 @@ def run_backtest_experiment(conn: sqlite3.Connection, request: BacktestRequest) 
             request.board.value if request.board else None,
             profile,
             request.allow_below_market_ma25,
-            request.volume_ratio_min,
+            backtest_volume_ratio_min(profile, request.volume_ratio_min),
         )
         result = run_backtest(
             picks=picks,
@@ -363,6 +379,10 @@ def effective_max_positions_per_day(requested: int, profile: BacktestProfile) ->
     if profile.max_positions_per_day is None:
         return requested
     return min(requested, profile.max_positions_per_day)
+
+
+def backtest_volume_ratio_min(profile: BacktestProfile, requested: float | None) -> float | None:
+    return requested if profile.id == "old_cat" else None
 
 
 def get_trade_book(conn: sqlite3.Connection) -> TradeBookOut:
@@ -471,6 +491,16 @@ def build_backtest_picks(
 ) -> list[StockPickOut]:
     if profile is not None and profile.selector == "b1":
         return build_b1_backtest_picks(conn, start_date, end_date, holding_days, board, profile)
+    if profile is not None and profile.selector == "ultra_short":
+        return build_ultra_short_backtest_picks(
+            conn,
+            start_date,
+            end_date,
+            holding_days,
+            board,
+            profile,
+            allow_below_market_ma25,
+        )
     if profile is not None and profile.selector == "jia_ban":
         return build_jia_ban_backtest_picks(
             conn,
@@ -795,6 +825,854 @@ def old_cat_limit2_daily_change_percent(quote: DailyQuoteIn) -> float:
     if quote.previous_close <= 0:
         return 0.0
     return (quote.close - quote.previous_close) / quote.previous_close * 100.0
+
+
+def build_ultra_short_backtest_picks(
+    conn: sqlite3.Connection,
+    start_date: str | None,
+    end_date: str | None,
+    holding_days: int,
+    board: str | None,
+    profile: BacktestProfile,
+    allow_below_market_ma25: bool,
+) -> list[StockPickOut]:
+    selected_end = end_date or repository.latest_quote_date(conn)
+    if not selected_end:
+        return []
+    selected_start = start_date or date_days_before(selected_end, DEFAULT_SYNC_DAYS)
+    load_start = date_days_before(selected_start, profile.lookback_days) if profile.lookback_days > 0 else selected_start
+
+    quotes_by_code: dict[str, list[DailyQuoteIn]] = {}
+    for quote in repository.load_daily_quotes_between(conn, load_start, selected_end, include_minute_trades=True):
+        if board and quote.board.value != board:
+            continue
+        quotes_by_code.setdefault(quote.code, []).append(quote)
+
+    snapshots: list[PickSnapshot] = []
+    for quotes in quotes_by_code.values():
+        snapshots.extend(ultra_short_snapshots_for_code(quotes, start_date, end_date, profile))
+
+    if not allow_below_market_ma25:
+        snapshots = [snapshot for snapshot in snapshots if market_above_ma25(conn, snapshot.trade_date)]
+
+    snapshots.sort(key=lambda item: (item.trade_date, item.board.value, item.code))
+    return [snapshot_to_pick(conn, snapshot, max(holding_days, 1)) for snapshot in snapshots]
+
+
+def ultra_short_snapshots_for_code(
+    quotes: Sequence[DailyQuoteIn],
+    start_date: str | None,
+    end_date: str | None,
+    profile: BacktestProfile,
+) -> list[PickSnapshot]:
+    sorted_quotes = sorted(quotes, key=lambda item: item.trade_date)
+    opens: list[float] = []
+    highs: list[float] = []
+    lows: list[float] = []
+    closes: list[float] = []
+    volumes: list[int] = []
+    white_lines: list[float | None] = []
+    yellow_lines: list[float | None] = []
+    bbi_values: list[float | None] = []
+    short_values: list[float | None] = []
+    long_values: list[float | None] = []
+    j_values: list[float | None] = []
+    rsi_values: list[float | None] = []
+    brick_values: list[float | None] = []
+    exists_b_values: list[bool] = []
+    cross_close_yellow_values: list[bool] = []
+
+    ema10: float | None = None
+    zxdq: float | None = None
+    k_value: float | None = None
+    d_value: float | None = None
+    rsi_gain_sma: float | None = None
+    rsi_abs_sma: float | None = None
+    var1_sma: float | None = None
+    var4_sma: float | None = None
+    var5_sma: float | None = None
+    result: list[PickSnapshot] = []
+
+    for quote in sorted_quotes:
+        opens.append(quote.open)
+        highs.append(quote.high)
+        lows.append(quote.low)
+        closes.append(quote.close)
+        volumes.append(quote_volume(quote))
+
+        ema10 = ema(quote.close, ema10, 10)
+        zxdq = ema(ema10, zxdq, 10)
+        white_lines.append(zxdq)
+        yellow_lines.append(ultra_short_yellow_line(closes))
+        bbi_values.append(ultra_short_bbi(closes))
+        short_values.append(ultra_short_price_line(closes, lows, 3))
+        long_values.append(ultra_short_price_line(closes, lows, ULTRA_SHORT_LONG_WINDOW))
+
+        brick, var1_sma, var4_sma, var5_sma = ultra_short_brick_value(
+            closes,
+            highs,
+            lows,
+            var1_sma,
+            var4_sma,
+            var5_sma,
+        )
+        brick_values.append(brick)
+
+        rsv = b1_rsv(closes, highs, lows, 9)
+        if rsv is not None:
+            k_value = tdx_sma(rsv, k_value, 3, 1)
+            d_value = tdx_sma(k_value, d_value, 3, 1)
+        j_values.append(3.0 * k_value - 2.0 * d_value if k_value is not None and d_value is not None else None)
+
+        previous_close = ref_value(closes, 1)
+        gain = max(quote.close - previous_close, 0.0) if previous_close is not None else 0.0
+        change_abs = abs(quote.close - previous_close) if previous_close is not None else 0.0
+        rsi_gain_sma = tdx_sma(gain, rsi_gain_sma, 3, 1)
+        rsi_abs_sma = tdx_sma(change_abs, rsi_abs_sma, 3, 1)
+        rsi_values.append((rsi_gain_sma / rsi_abs_sma * 100.0) if rsi_abs_sma and rsi_abs_sma > 0 else 0.0)
+
+        previous_yellow = ref_value(yellow_lines, 1)
+        current_yellow = last_value(yellow_lines)
+        previous_close_for_cross = ref_value(closes, 1)
+        cross_close_yellow_values.append(
+            current_yellow is not None
+            and previous_yellow is not None
+            and previous_close_for_cross is not None
+            and quote.close > current_yellow
+            and previous_close_for_cross <= previous_yellow
+        )
+
+        exists_b_values.append(
+            ultra_short_exists_b(
+                quote,
+                opens,
+                highs,
+                lows,
+                closes,
+                volumes,
+                white_lines,
+                yellow_lines,
+                bbi_values,
+                short_values,
+                long_values,
+                j_values,
+                rsi_values,
+                cross_close_yellow_values,
+                profile,
+            )
+        )
+
+        if (
+            in_date_range(quote.trade_date, start_date, end_date)
+            and len(closes) >= ULTRA_SHORT_MIN_HISTORY_DAYS
+            and ultra_short_matches_conditions(
+                quote,
+                opens,
+                highs,
+                lows,
+                closes,
+                volumes,
+                white_lines,
+                yellow_lines,
+                short_values,
+                long_values,
+                j_values,
+                rsi_values,
+                brick_values,
+                exists_b_values,
+                profile,
+            )
+        ):
+            result.append(ultra_short_snapshot(quote))
+
+    return result
+
+
+def ultra_short_matches_conditions(
+    quote: DailyQuoteIn,
+    opens: Sequence[float],
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    volumes: Sequence[int],
+    white_lines: Sequence[float | None],
+    yellow_lines: Sequence[float | None],
+    short_values: Sequence[float | None],
+    long_values: Sequence[float | None],
+    j_values: Sequence[float | None],
+    rsi_values: Sequence[float | None],
+    brick_values: Sequence[float | None],
+    exists_b_values: Sequence[bool],
+    profile: BacktestProfile,
+) -> bool:
+    if quote.board not in (MarketBoard.main, MarketBoard.chinext):
+        return False
+    if profile.exclude_st and is_st_stock(quote.name):
+        return False
+    return ultra_short_condition1(
+        quote,
+        opens,
+        highs,
+        lows,
+        closes,
+        volumes,
+        white_lines,
+        yellow_lines,
+        short_values,
+        long_values,
+        j_values,
+        rsi_values,
+        brick_values,
+        exists_b_values,
+    ) and ultra_short_condition2(quote, opens, highs, closes, volumes, white_lines)
+
+
+def ultra_short_condition1(
+    quote: DailyQuoteIn,
+    opens: Sequence[float],
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    volumes: Sequence[int],
+    white_lines: Sequence[float | None],
+    yellow_lines: Sequence[float | None],
+    short_values: Sequence[float | None],
+    long_values: Sequence[float | None],
+    j_values: Sequence[float | None],
+    rsi_values: Sequence[float | None],
+    brick_values: Sequence[float | None],
+    exists_b_values: Sequence[bool],
+) -> bool:
+    white_line = last_value(white_lines)
+    yellow_line = last_value(yellow_lines)
+    previous_yellow = ref_value(yellow_lines, 1)
+    previous_close = ref_value(closes, 1)
+    if white_line is None or yellow_line is None or previous_yellow is None or previous_close is None:
+        return False
+
+    yellow_column, x_momentum = ultra_short_momentum(opens, highs, closes, volumes, j_values, rsi_values)
+    brick = last_value(brick_values)
+    previous_brick = ref_value(brick_values, 1)
+    length = (brick - previous_brick) if brick is not None and previous_brick is not None else 0.0
+    strong_red = ultra_short_strong_red(brick_values)
+
+    trend_condition = (
+        white_line >= yellow_line * 0.995
+        and yellow_line >= previous_yellow * 0.997
+        and quote.close >= yellow_line * 0.997
+    )
+
+    upper_shadow_base = quote.high - min(quote.low, previous_close)
+    upper_shadow_condition = (
+        (quote.close >= quote.open or quote.close > previous_close)
+        and upper_shadow_base > 0
+        and (1.0 - (quote.high - quote.close) / upper_shadow_base) > 0.618
+    )
+    turnover_condition = quote.turnover_rate >= ULTRA_SHORT_TURNOVER_MIN
+    previous_long = ref_value(long_values, 1)
+    previous_short = ref_value(short_values, 1)
+    current_long = last_value(long_values)
+    current_short = last_value(short_values)
+
+    resonance1 = (
+        strong_red
+        and (yellow_column >= 7.5 or x_momentum >= 7.5)
+        and (
+            exists_last(exists_b_values, 2)
+            or (
+                previous_long is not None
+                and previous_short is not None
+                and previous_long > 85.0
+                and previous_short < 30.0
+            )
+        )
+    )
+    resonance2 = (
+        strong_red
+        and (yellow_column >= 10.0 or x_momentum >= 10.0)
+        and (
+            (
+                count_last_predicate(
+                    [long_short_spread(long_values, short_values, index) for index in range(len(long_values))],
+                    4,
+                    lambda value: value is not None and value > 60.0,
+                )
+                > 0
+                and current_long is not None
+                and current_short is not None
+                and current_long > 98.0
+                and current_short > 98.0
+            )
+            or (yellow_column > 20.0 and quote.close > white_line)
+            or yellow_column > 30.0
+            or (yellow_column + length) > 50.0
+            or x_momentum > 40.0
+        )
+    )
+    return (resonance1 or resonance2) and upper_shadow_condition and trend_condition and turnover_condition
+
+
+def ultra_short_condition2(
+    quote: DailyQuoteIn,
+    opens: Sequence[float],
+    highs: Sequence[float],
+    closes: Sequence[float],
+    volumes: Sequence[int],
+    white_lines: Sequence[float | None],
+) -> bool:
+    previous_close = ref_value(closes, 1)
+    if previous_close is None or previous_close <= 0:
+        return False
+    average_volume = simple_ma_at(volumes, 20)
+    zxdq = last_value(white_lines)
+    if average_volume is None or zxdq is None:
+        return False
+    wick_base = max(quote.open, quote.close)
+    wick = (quote.high - wick_base) / wick_base if wick_base > 0 else 1.0
+    return (
+        quote.close >= quote.open
+        and (quote.close / previous_close - 1.0) * 100.0 > 4.0
+        and wick < 0.03
+        and volumes[-1] > 1.5 * average_volume
+        and quote.close < zxdq * 1.15
+    )
+
+
+def ultra_short_exists_b(
+    quote: DailyQuoteIn,
+    opens: Sequence[float],
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    volumes: Sequence[int],
+    white_lines: Sequence[float | None],
+    yellow_lines: Sequence[float | None],
+    bbi_values: Sequence[float | None],
+    short_values: Sequence[float | None],
+    long_values: Sequence[float | None],
+    j_values: Sequence[float | None],
+    rsi_values: Sequence[float | None],
+    cross_close_yellow_values: Sequence[bool],
+    profile: BacktestProfile,
+) -> bool:
+    if quote.board not in (MarketBoard.main, MarketBoard.chinext):
+        return False
+    if profile.exclude_st and is_st_stock(quote.name):
+        return False
+
+    white_line = last_value(white_lines)
+    yellow_line = last_value(yellow_lines)
+    bbi = last_value(bbi_values)
+    j_value = last_value(j_values)
+    rsi = last_value(rsi_values)
+    previous_close = ref_value(closes, 1)
+    previous_yellow = ref_value(yellow_lines, 1)
+    if (
+        white_line is None
+        or yellow_line is None
+        or bbi is None
+        or j_value is None
+        or rsi is None
+        or previous_close is None
+        or previous_close <= 0
+        or previous_yellow is None
+    ):
+        return False
+
+    amplitude_range, relax_factor = ultra_short_amplitude_settings(quote.code, closes)
+    daily_amplitude = (quote.high - quote.low) / quote.low * 100.0 if quote.low > 0 else 0.0
+    daily_change = abs(quote.close - previous_close) / previous_close * 100.0 * relax_factor
+    up_doji = quote.close > previous_close and (abs(quote.close - quote.open) / quote.open * 100.0 * relax_factor) < 1.8
+
+    current_short = last_value(short_values)
+    current_long = last_value(long_values)
+    if current_short is None or current_long is None:
+        return False
+    single_needle_flags = [
+        (short is not None and long is not None and ((short <= 20.0 and long >= 75.0) or (long - short) >= 70.0))
+        for short, long in zip(short_values, long_values)
+    ]
+    treasure_basin = (
+        count_last_predicate(long_values, 8, lambda value: value is not None and value >= 75.0) >= 6
+        and count_last_predicate(short_values, 7, lambda value: value is not None and value <= 70.0) >= 4
+        and count_last_predicate(short_values, 8, lambda value: value is not None and value <= 50.0) >= 1
+    )
+    double_halberd = (
+        every_last_predicate(long_values, 8, lambda value: value is not None and value >= 75.0)
+        and count_last_predicate(short_values, 6, lambda value: value is not None and value <= 50.0) >= 2
+        and count_last_predicate(short_values, 7, lambda value: value is not None and value <= 20.0) >= 1
+    )
+    red_fat_green_thin = (
+        count_last_indexed(len(closes), 15, lambda index: closes[index] >= opens[index]) > 7
+        or count_last_indexed(len(closes), 11, lambda index: index > 0 and closes[index] > closes[index - 1]) > 5
+    )
+
+    vday = hhvbars(volumes, 40)
+    volume_day_close = ref_value(closes, vday)
+    volume_day_previous_close = ref_value(closes, vday + 1)
+    volume_day_open = ref_value(opens, vday)
+    not_big_green_bar = True
+    if volume_day_close is not None and volume_day_previous_close is not None and volume_day_open is not None:
+        not_big_green_bar = volume_day_close >= volume_day_previous_close or volume_day_close >= volume_day_open
+    big_green_bar = not not_big_green_bar
+    big_green_bar_far = vday >= 15 and big_green_bar
+    not_big_green_or_far = not_big_green_bar or big_green_bar_far
+
+    shrink = volume_lt_hhv_ratio(volumes, 20, 0.416) or volume_lt_hhv_ratio(volumes, 50, 1.0 / 3.0)
+    pullback_shrink = volume_lt_hhv_ratio(volumes, 20, 0.45) or volume_lt_hhv_ratio(volumes, 50, 1.0 / 3.0)
+    moderate_shrink = volume_lt_hhv_ratio(volumes, 20, 0.618) or volume_lt_hhv_ratio(volumes, 50, 1.0 / 3.0)
+    super_shrink = volume_lt_hhv_ratio(volumes, 30, 0.25) or volume_lt_hhv_ratio(volumes, 50, 1.0 / 6.0)
+
+    recent_amplitude = percent_range(highs, lows, 20)
+    recent_alt_amplitude = percent_mixed_range(highs, lows, 12, 14)
+    recent_anomaly = recent_amplitude >= 15.0 or recent_alt_amplitude >= 11.0
+    far_amplitude = percent_range(highs, lows, 50)
+    far_anomaly = far_amplitude >= 30.0
+    super_anomaly = recent_amplitude >= 60.0
+    wash_anomaly = count_last_predicate(single_needle_flags, 10, bool) >= 2 or treasure_basin or double_halberd
+
+    uptrend = white_line >= yellow_line * 0.999 and (
+        quote.close >= yellow_line or (quote.close > yellow_line * 0.975 and quote.close > quote.open)
+    )
+    strong_trend = (
+        every_ge_ref(yellow_lines, 13, 0.999)
+        and ref_value(white_lines, 1) is not None
+        and white_line >= (ref_value(white_lines, 1) or 0.0)
+        and every_pair_last(white_lines, yellow_lines, 20, lambda white, yellow: white > yellow)
+        and every_ge_ref(white_lines, 11, 1.0)
+        and red_fat_green_thin
+    )
+    super_bull = (
+        (every_ge_ref(bbi_values, 20, 0.999) or count_ge_ref(bbi_values, 25, 1.0) >= 23)
+        and (recent_amplitude >= 30.0 or far_amplitude > 80.0)
+        and barslast(cross_close_yellow_values) > 12
+    )
+
+    distance_white = abs(quote.close - white_line) / quote.close * 100.0 if quote.close > 0 else 100.0
+    low_distance_white = abs(quote.low - white_line) / white_line * 100.0 if white_line > 0 else 100.0
+    distance_bbi = abs(quote.close - bbi) / quote.close * 100.0 if quote.close > 0 else 100.0
+    low_distance_bbi = abs(quote.low - bbi) / bbi * 100.0 if bbi > 0 else 100.0
+    pullback_white = (
+        (quote.close >= white_line and distance_white <= 2.0)
+        or (quote.close < white_line and distance_white < 0.8)
+        or (
+            quote.close >= bbi
+            and distance_bbi < 2.5
+            and low_distance_bbi < 1.0
+            and distance_white <= 3.0
+            and daily_change < 1.0
+            and quote.close > previous_close
+        )
+    )
+    white_support = quote.close >= white_line and distance_white < 1.5
+    strong_pullback_not_break = (
+        (low_distance_white < 1.0 or low_distance_bbi < 0.5)
+        and quote.close > white_line
+        and distance_white <= 3.5
+    )
+
+    distance_yellow = abs(quote.close - yellow_line) / yellow_line * 100.0 if yellow_line > 0 else 100.0
+    pullback_yellow = (
+        quote.close >= yellow_line and (distance_yellow <= 1.5 or (distance_yellow <= 2.0 and daily_change < 1.0))
+    ) or (quote.close < yellow_line and distance_yellow <= 0.8)
+
+    rsi_j_values = [sum_pair(rsi_item, j_item) for rsi_item, j_item in zip(rsi_values, j_values)]
+    previous_rsi = ref_value(rsi_values, 1)
+    previous_j = ref_value(j_values, 1)
+    rsi_j = rsi + j_value
+
+    oversold_shrink_turn_b = (
+        uptrend
+        and previous_rsi is not None
+        and previous_j is not None
+        and (rsi - 15.0) >= previous_rsi
+        and (previous_rsi < 20.0 or previous_j < 14.0)
+        and daily_amplitude < (amplitude_range + 0.5)
+        and (daily_change < 2.3 or (up_doji and daily_change < 4.0))
+        and not_big_green_or_far
+        and (recent_anomaly or far_anomaly or wash_anomaly)
+        and quote.close >= yellow_line
+    )
+    oversold_shrink_b = (
+        uptrend
+        and (j_value < 14.0 or rsi < 23.0)
+        and (rsi_j < 55.0 or is_last_llv(j_values, 20))
+        and daily_amplitude < amplitude_range
+        and (daily_change < 2.5 or up_doji)
+        and not_big_green_or_far
+        and (shrink or (moderate_shrink and daily_change < 1.0))
+        and (recent_anomaly or far_anomaly or wash_anomaly)
+    )
+    original_b1 = (
+        white_line > yellow_line
+        and quote.close >= yellow_line * 0.99
+        and yellow_line >= previous_yellow
+        and (j_value < 13.0 or rsi < 21.0)
+        and min_last(rsi_j_values, 15) is not None
+        and rsi_j < (min_last(rsi_j_values, 15) or 0.0) * 1.5
+        and moderate_shrink
+        and not_big_green_or_far
+        and (
+            abs(quote.close - quote.open) * 100.0 / quote.open < 1.5
+            or (
+                super_shrink
+                or (moderate_shrink and volumes[-1] < (min_last(volumes, 20) or 0.0) * 1.1 and is_last_llv(j_values, 20))
+            )
+            or (moderate_shrink and (distance_white < 1.8 or distance_bbi < 1.5 or distance_yellow < 2.8))
+        )
+        and (recent_anomaly or far_anomaly or wash_anomaly)
+    )
+    oversold_super_shrink_b = (
+        uptrend
+        and (j_value < 14.0 or rsi < 23.0)
+        and rsi_j < 60.0
+        and far_amplitude >= 45.0
+        and (
+            daily_amplitude < amplitude_range
+            or (super_anomaly and daily_amplitude < amplitude_range + 3.2 and quote.close > quote.open and quote.close > white_line)
+        )
+        and ((quote.close < quote.open and volumes[-1] < (ref_value(volumes, 1) or 0) and quote.close >= yellow_line) or quote.close >= quote.open)
+        and (daily_change < 2.0 or up_doji)
+        and not_big_green_or_far
+        and super_shrink
+        and (recent_anomaly or far_anomaly or wash_anomaly)
+    )
+    pullback_white_b = (
+        strong_trend
+        and (j_value < 30.0 or rsi < 40.0 or wash_anomaly)
+        and rsi_j < 70.0
+        and (daily_amplitude < amplitude_range + 0.5 or distance_white < 1.0 or distance_bbi < 1.0)
+        and pullback_white
+        and (daily_change < 2.0 or (daily_change < 5.0 and white_support))
+        and not_big_green_or_far
+        and pullback_shrink
+        and (recent_anomaly or far_anomaly or wash_anomaly)
+        and quote.low <= previous_close
+    )
+    pullback_super_b = (
+        super_bull
+        and (j_value < 35.0 or rsi < 45.0 or wash_anomaly)
+        and rsi_j < 80.0
+        and is_last_llv(rsi_j_values, 25)
+        and daily_amplitude < amplitude_range + 1.0
+        and (daily_change < 2.5 or distance_white < 2.0)
+        and strong_pullback_not_break
+        and not_big_green_or_far
+        and (recent_anomaly or far_anomaly or wash_anomaly)
+        and moderate_shrink
+    )
+    pullback_yellow_b = (
+        white_line >= yellow_line
+        and quote.close >= yellow_line * 0.975
+        and (j_value < 13.0 or rsi < 18.0)
+        and pullback_yellow
+        and not_big_green_or_far
+        and (shrink or (moderate_shrink and (is_last_llv(j_values, 20) or is_last_llv(rsi_values, 14))))
+        and yellow_line >= previous_yellow * 0.997
+        and simple_ma_at(closes, 60) is not None
+        and simple_ma_at(closes[:-1], 60) is not None
+        and (simple_ma_at(closes, 60) or 0.0) >= (simple_ma_at(closes[:-1], 60) or 0.0)
+        and recent_amplitude >= 11.9
+        and far_amplitude >= 19.5
+    )
+
+    return (
+        oversold_shrink_turn_b
+        or oversold_shrink_b
+        or original_b1
+        or oversold_super_shrink_b
+        or pullback_white_b
+        or pullback_super_b
+        or pullback_yellow_b
+    )
+
+
+def ultra_short_snapshot(quote: DailyQuoteIn) -> PickSnapshot:
+    return PickSnapshot(
+        trade_date=quote.trade_date,
+        code=quote.code,
+        name=quote.name,
+        board=quote.board,
+        concept=quote.concept,
+        close=quote.close,
+        change_percent=(quote.close - quote.previous_close) / quote.previous_close * 100.0 if quote.previous_close > 0 else 0.0,
+        volume_ratio=quote.volume_ratio,
+        turnover_rate=quote.turnover_rate,
+        total_mv_wan=quote.total_mv_wan,
+        sealed_amount_wan=quote.sealed_amount_wan,
+        stop_loss_price=quote.close,
+        limit_shape="ultra_short",
+        limit_shape_label="超短战法",
+        next_open=quote.next_open,
+        future_closes=quote.future_closes,
+    )
+
+
+def ultra_short_yellow_line(closes: Sequence[float]) -> float | None:
+    if len(closes) < max(ULTRA_SHORT_YELLOW_WINDOWS):
+        return None
+    return sum(simple_ma(closes, window) for window in ULTRA_SHORT_YELLOW_WINDOWS) / len(ULTRA_SHORT_YELLOW_WINDOWS)
+
+
+def ultra_short_bbi(closes: Sequence[float]) -> float | None:
+    windows = (3, 6, 12, 24)
+    if len(closes) < max(windows):
+        return None
+    return sum(simple_ma(closes, window) for window in windows) / len(windows)
+
+
+def ultra_short_price_line(closes: Sequence[float], lows: Sequence[float], window: int) -> float | None:
+    highest_close = max_last(closes, window)
+    lowest_low = min_last(lows, window)
+    if highest_close is None or lowest_low is None:
+        return None
+    spread = highest_close - lowest_low
+    if spread == 0:
+        return 50.0
+    return (closes[-1] - lowest_low) / spread * 100.0
+
+
+def ultra_short_brick_value(
+    closes: Sequence[float],
+    highs: Sequence[float],
+    lows: Sequence[float],
+    var1_sma: float | None,
+    var4_sma: float | None,
+    var5_sma: float | None,
+) -> tuple[float | None, float | None, float | None, float | None]:
+    highest_high = max_last(highs, 4)
+    lowest_low = min_last(lows, 4)
+    if highest_high is None or lowest_low is None:
+        return None, var1_sma, var4_sma, var5_sma
+    spread = highest_high - lowest_low
+    if spread == 0:
+        var1a = -40.0
+        var3a = 50.0
+    else:
+        var1a = (highest_high - closes[-1]) / spread * 100.0 - 90.0
+        var3a = (closes[-1] - lowest_low) / spread * 100.0
+    var1_sma = tdx_sma(var1a, var1_sma, 4, 1)
+    var4_sma = tdx_sma(var3a, var4_sma, 6, 1)
+    var5_sma = tdx_sma(var4_sma, var5_sma, 6, 1)
+    var6a = (var5_sma + 100.0) - (var1_sma + 100.0)
+    return (var6a - 4.0 if var6a > 4.0 else 0.0), var1_sma, var4_sma, var5_sma
+
+
+def ultra_short_momentum(
+    opens: Sequence[float],
+    highs: Sequence[float],
+    closes: Sequence[float],
+    volumes: Sequence[int],
+    j_values: Sequence[float | None],
+    rsi_values: Sequence[float | None],
+) -> tuple[float, float]:
+    current_j = last_value(j_values)
+    previous_j = ref_value(j_values, 1)
+    two_back_j = ref_value(j_values, 2)
+    current_rsi = last_value(rsi_values)
+    previous_rsi = ref_value(rsi_values, 1)
+    two_back_rsi = ref_value(rsi_values, 2)
+    previous_close = ref_value(closes, 1)
+    previous_volume = ref_value(volumes, 1)
+    if (
+        current_j is None
+        or previous_j is None
+        or two_back_j is None
+        or current_rsi is None
+        or previous_rsi is None
+        or two_back_rsi is None
+        or previous_close is None
+        or previous_volume is None
+        or previous_volume <= 0
+    ):
+        return 0.0, 0.0
+
+    n1 = current_j - previous_j
+    n2 = current_rsi - previous_rsi
+    previous_n1 = previous_j - two_back_j
+    previous_n2 = previous_rsi - two_back_rsi
+    volume_ratio = volumes[-1] / previous_volume
+    volume_coeff = (1.0 - 5.0 * (previous_volume - volumes[-1]) / previous_volume) * 0.8 if volumes[-1] < previous_volume * 0.99 else 1.0
+    multiple_volume_coeff = 1.4 if volume_ratio >= 4.0 else 0.1 * volume_ratio + 1.0
+    multiple_volume_bonus = (
+        multiple_volume_coeff
+        if closes[-1] > opens[-1] and closes[-1] > previous_close and volumes[-1] > previous_volume * 1.8
+        else 1.0
+    )
+
+    shadow_coeff = 1.0
+    shadow_base = highs[-1] - min(opens[-1], previous_close)
+    if closes[-1] > previous_close and closes[-1] > opens[-1] and shadow_base > 0:
+        shadow_coeff = (0.75 - (highs[-1] - closes[-1]) / shadow_base) * 1.3
+
+    yellow_column = (n1 + n2) / 2.0 * shadow_coeff * multiple_volume_bonus
+    x_momentum = 0.0
+    if closes[-1] > opens[-1] and closes[-1] > previous_close and (n1 + n2) > (previous_n1 + previous_n2):
+        x_momentum = (
+            ((n1 + n2) - (previous_n1 + previous_n2))
+            / 2.0
+            * shadow_coeff
+            * volume_coeff
+            * multiple_volume_bonus
+        )
+    return yellow_column, x_momentum
+
+
+def ultra_short_strong_red(brick_values: Sequence[float | None]) -> bool:
+    brick = last_value(brick_values)
+    previous_brick = ref_value(brick_values, 1)
+    two_back_brick = ref_value(brick_values, 2)
+    if brick is None or previous_brick is None or two_back_brick is None:
+        return False
+    today_red = brick > previous_brick
+    yesterday_green = previous_brick <= two_back_brick
+    red_length = brick - previous_brick if today_red else 0.0
+    yesterday_green_length = two_back_brick - previous_brick if yesterday_green else 0.0
+    ratio = red_length / yesterday_green_length if yesterday_green_length > 0 else 0.0
+    return today_red and yesterday_green and ratio > 0.666
+
+
+def ultra_short_amplitude_settings(code: str, closes: Sequence[float]) -> tuple[float, float]:
+    relaxed_code = code.startswith(("68", "30", "4", "8", "9"))
+    recent_limit_move = any(
+        closes[index - 1] > 0 and closes[index] / closes[index - 1] > 1.15
+        for index in range(max(1, len(closes) - 199), len(closes))
+    )
+    return (8.0, 0.9) if relaxed_code or recent_limit_move else (5.0, 1.0)
+
+
+def percent_range(highs: Sequence[float], lows: Sequence[float], window: int) -> float:
+    highest = max_last(highs, window)
+    lowest = min_last(lows, window)
+    if highest is None or lowest is None or lowest <= 0:
+        return 0.0
+    return (highest - lowest) / lowest * 100.0
+
+
+def percent_mixed_range(highs: Sequence[float], lows: Sequence[float], high_window: int, low_window: int) -> float:
+    highest = max_last(highs, high_window)
+    lowest = min_last(lows, low_window)
+    if highest is None or lowest is None or lowest <= 0:
+        return 0.0
+    return (highest - lowest) / lowest * 100.0
+
+
+def volume_lt_hhv_ratio(volumes: Sequence[int], window: int, ratio: float) -> bool:
+    highest = max_last(volumes, window)
+    return highest is not None and volumes[-1] < highest * ratio
+
+
+def long_short_spread(
+    long_values: Sequence[float | None],
+    short_values: Sequence[float | None],
+    index: int,
+) -> float | None:
+    long_value = long_values[index]
+    short_value = short_values[index]
+    return long_value - short_value if long_value is not None and short_value is not None else None
+
+
+def sum_pair(first: float | None, second: float | None) -> float | None:
+    return first + second if first is not None and second is not None else None
+
+
+def last_value(values: Sequence[float | int | bool | None]) -> Any:
+    return values[-1] if values else None
+
+
+def ref_value(values: Sequence[float | int | bool | None], offset: int) -> Any:
+    if offset < 0 or len(values) <= offset:
+        return None
+    return values[-1 - offset]
+
+
+def max_last(values: Sequence[float | int | None], window: int) -> float | int | None:
+    valid = [value for value in values[-window:] if value is not None]
+    return max(valid) if valid else None
+
+
+def min_last(values: Sequence[float | int | None], window: int) -> float | int | None:
+    valid = [value for value in values[-window:] if value is not None]
+    return min(valid) if valid else None
+
+
+def simple_ma_at(values: Sequence[float | int], window: int) -> float | None:
+    if len(values) < window:
+        return None
+    return sum(values[-window:]) / window
+
+
+def hhvbars(values: Sequence[int], window: int) -> int:
+    recent = list(values[-window:])
+    if not recent:
+        return 0
+    highest = max(recent)
+    for offset, value in enumerate(reversed(recent)):
+        if value == highest:
+            return offset
+    return 0
+
+
+def count_last_predicate(values: Sequence, window: int, predicate) -> int:
+    return sum(1 for value in values[-window:] if predicate(value))
+
+
+def every_last_predicate(values: Sequence, window: int, predicate) -> bool:
+    return len(values) >= window and all(predicate(value) for value in values[-window:])
+
+
+def count_last_indexed(length: int, window: int, predicate) -> int:
+    start = max(0, length - window)
+    return sum(1 for index in range(start, length) if predicate(index))
+
+
+def exists_last(values: Sequence[bool], window: int) -> bool:
+    return any(values[-window:])
+
+
+def every_ge_ref(values: Sequence[float | None], window: int, multiplier: float) -> bool:
+    if len(values) <= window:
+        return False
+    for offset in range(window):
+        current = ref_value(values, offset)
+        previous = ref_value(values, offset + 1)
+        if current is None or previous is None or current < previous * multiplier:
+            return False
+    return True
+
+
+def count_ge_ref(values: Sequence[float | None], window: int, multiplier: float) -> int:
+    if len(values) <= 1:
+        return 0
+    count = 0
+    for offset in range(min(window, len(values) - 1)):
+        current = ref_value(values, offset)
+        previous = ref_value(values, offset + 1)
+        if current is not None and previous is not None and current >= previous * multiplier:
+            count += 1
+    return count
+
+
+def every_pair_last(first_values: Sequence[float | None], second_values: Sequence[float | None], window: int, predicate) -> bool:
+    if len(first_values) < window or len(second_values) < window:
+        return False
+    for first, second in zip(first_values[-window:], second_values[-window:]):
+        if first is None or second is None or not predicate(first, second):
+            return False
+    return True
+
+
+def barslast(values: Sequence[bool]) -> int:
+    for offset, value in enumerate(reversed(values)):
+        if value:
+            return offset
+    return 1_000_000
+
+
+def is_last_llv(values: Sequence[float | None], window: int) -> bool:
+    current = last_value(values)
+    lowest = min_last(values, window)
+    return current is not None and lowest is not None and current <= lowest + 1e-9
 
 
 def build_b1_backtest_picks(

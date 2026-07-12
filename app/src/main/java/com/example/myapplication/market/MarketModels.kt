@@ -202,10 +202,10 @@ enum class BacktestStrategy(
         title = "老猫战法",
         description = "只做首板且早上封板，排除 ST 和一字板；涨停日后第 2 个交易日开盘若相对涨停日收盘价涨幅不超过 5% 则买入；触及分时均线止损线时按收盘价卖出，止盈率可设置。"
     ),
-    B1(
-        id = "b1",
-        title = "B1 战法",
-        description = "J<13，收盘价贴近知行短期线或多空线，明显缩量且日线呈 N 型上涨结构；排除 ST 和市值小于 50 亿标的。"
+    UltraShort(
+        id = "ultra_short",
+        title = "超短战法",
+        description = "同时满足 ZXB1 砖形图共振和长阳放量条件；T+1 开盘买入，固定按 10% 止盈、3 个交易日到期或收盘跌破买入价止损。"
     )
 }
 

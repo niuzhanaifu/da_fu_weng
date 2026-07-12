@@ -186,6 +186,57 @@ class OldCatLimit2Strategy:
         )
 
 
+@dataclass(frozen=True)
+class UltraShortStrategy:
+    id: str = "ultra_short"
+
+    def simulate_trade(self, pick: StockPickOut, holding_days: int, take_profit_percent: float) -> BacktestTradeOut | None:
+        trade_holding_days = 3
+        if (
+            len(pick.future_opens) < trade_holding_days
+            or len(pick.future_closes) < trade_holding_days
+            or len(pick.future_highs) < trade_holding_days
+            or len(pick.future_dates) < trade_holding_days
+        ):
+            return None
+
+        buy_price = pick.future_opens[0]
+        if buy_price is None or buy_price <= 0:
+            return None
+
+        take_profit_price = buy_price * 1.10
+        sell_price = pick.future_closes[trade_holding_days - 1]
+        sell_index = trade_holding_days - 1
+        exit_reason = "超短战法：持有3个交易日"
+
+        for index in range(trade_holding_days):
+            high = pick.future_highs[index]
+            close = pick.future_closes[index]
+            if high >= take_profit_price:
+                sell_price = take_profit_price
+                sell_index = index
+                exit_reason = "超短战法：收益达到10%止盈"
+                break
+            if close < buy_price:
+                sell_price = close
+                sell_index = index
+                exit_reason = "超短战法：收盘跌破买入价止损"
+                break
+
+        return BacktestTradeOut(
+            code=pick.code,
+            name=pick.name,
+            board=pick.board,
+            buy_date=pick.future_dates[0],
+            sell_date=pick.future_dates[sell_index],
+            buy_price=buy_price,
+            sell_price=sell_price,
+            stop_loss_price=buy_price,
+            return_percent=(sell_price - buy_price) / buy_price * 100.0,
+            exit_reason=exit_reason,
+        )
+
+
 STRATEGIES: dict[str, BacktestStrategy] = {
     "old_cat": OldCatStrategy(),
     "old_cat_timely_stop_loss": OldCatStrategy(
@@ -198,6 +249,7 @@ STRATEGIES: dict[str, BacktestStrategy] = {
     ),
     "jia_ban": JiaBanStrategy(),
     "old_cat_limit2": OldCatLimit2Strategy(),
+    "ultra_short": UltraShortStrategy(),
 }
 
 

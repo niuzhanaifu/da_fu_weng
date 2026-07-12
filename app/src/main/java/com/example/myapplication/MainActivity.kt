@@ -601,7 +601,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
         showDoneDialog = false
         errorMessage = null
         val takeProfitPercent = takeProfitText.toDoubleOrNull() ?: 10.0
-        val volumeRatioMin = volumeRatioText.toDoubleOrNull()
+        val volumeRatioMin = if (selectedStrategy == BacktestStrategy.OldCat) volumeRatioText.toDoubleOrNull() else null
         AppLogger.i("Backtest", "started remote strategy=${selectedStrategy.id} range=$normalizedStart..$normalizedEnd holdingDays=$holdingDays maxPositions=$maxPositionsPerDay")
         delay(350)
         try {
@@ -733,6 +733,7 @@ private fun BacktestPage(groups: List<DailyPickGroup>) {
         }
         item {
             BacktestControls(
+                selectedStrategy = selectedStrategy,
                 holdingDays = holdingDays,
                 maxPositionsPerDay = maxPositionsPerDay,
                 takeProfitText = takeProfitText,
@@ -1710,6 +1711,7 @@ private fun StrategyControls(
 
 @Composable
 private fun BacktestControls(
+    selectedStrategy: BacktestStrategy,
     holdingDays: Int,
     maxPositionsPerDay: Int,
     takeProfitText: String,
@@ -1723,6 +1725,8 @@ private fun BacktestControls(
     isRunning: Boolean,
     onRun: () -> Unit
 ) {
+    val requiresVolumeRatio = selectedStrategy == BacktestStrategy.OldCat
+    val usesFixedUltraShortExit = selectedStrategy == BacktestStrategy.UltraShort
     Card(
         colors = CardDefaults.cardColors(containerColor = Panel),
         shape = RoundedCornerShape(8.dp)
@@ -1733,7 +1737,11 @@ private fun BacktestControls(
             OutlinedTextField(
                 value = takeProfitText,
                 onValueChange = { raw -> onTakeProfit(raw.filter { it.isDigit() || it == '.' }.take(5)) },
-                label = { Text("止盈率 %") },
+                label = { Text(if (usesFixedUltraShortExit) "止盈率 %（超短固定10）" else "止盈率 %") },
+                supportingText = {
+                    if (usesFixedUltraShortExit) Text("超短战法固定按 10% 止盈。")
+                },
+                enabled = !usesFixedUltraShortExit,
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth()
@@ -1741,8 +1749,10 @@ private fun BacktestControls(
             OutlinedTextField(
                 value = volumeRatioText,
                 onValueChange = { raw -> onVolumeRatio(raw.filter { it.isDigit() || it == '.' }.take(4)) },
-                label = { Text("回测量比放大") },
-                supportingText = { Text("默认按量比大于 2 过滤，选股页也使用同一阈值") },
+                label = { Text("老猫量比阈值") },
+                supportingText = {
+                    Text(if (requiresVolumeRatio) "仅老猫战法使用；默认按量比大于 2 过滤。" else "当前战法忽略该字段。")
+                },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth()
@@ -1757,12 +1767,17 @@ private fun BacktestControls(
                     onCheckedChange = onAllowBelowMarketMa25
                 )
             }
-            Text("最大持有天数：$holdingDays 个工作日", color = Muted, fontSize = 13.sp)
+            Text(
+                if (usesFixedUltraShortExit) "最大持有天数：超短固定 3 个交易日" else "最大持有天数：$holdingDays 个工作日",
+                color = Muted,
+                fontSize = 13.sp
+            )
             Slider(
                 value = holdingDays.toFloat(),
                 onValueChange = { onHoldingDays(it.roundToInt().coerceIn(1, 10)) },
                 valueRange = 1f..10f,
-                steps = 8
+                steps = 8,
+                enabled = !usesFixedUltraShortExit
             )
             Text("同时买入数量：$maxPositionsPerDay 只", color = Muted, fontSize = 13.sp)
             Slider(
@@ -1775,7 +1790,7 @@ private fun BacktestControls(
                 onClick = onRun,
                 enabled = !isRunning &&
                     (takeProfitText.toDoubleOrNull() ?: 0.0) > 0.0 &&
-                    (volumeRatioText.toDoubleOrNull() ?: 0.0) > 0.0,
+                    (!requiresVolumeRatio || (volumeRatioText.toDoubleOrNull() ?: 0.0) > 0.0),
                 modifier = Modifier.fillMaxWidth(),
                 colors = ActionButtonColors()
             ) {
