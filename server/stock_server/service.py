@@ -867,6 +867,8 @@ def ultra_short_snapshots_for_code(
     j_values: list[float | None] = []
     rsi_values: list[float | None] = []
     brick_values: list[float | None] = []
+    macd_dif_values: list[float] = []
+    macd_dea_values: list[float] = []
     macd_values: list[float] = []
     exists_b_values: list[bool] = []
     cross_close_yellow_values: list[bool] = []
@@ -916,12 +918,14 @@ def ultra_short_snapshots_for_code(
             d_value = tdx_sma(k_value, d_value, 3, 1)
         j_values.append(3.0 * k_value - 2.0 * d_value if k_value is not None and d_value is not None else None)
 
-        macd_fast, macd_slow, macd_signal, macd_value = macd_histogram(
+        macd_fast, macd_slow, macd_signal, macd_dif, macd_value = macd_indicators(
             quote.close,
             macd_fast,
             macd_slow,
             macd_signal,
         )
+        macd_dif_values.append(macd_dif)
+        macd_dea_values.append(macd_signal)
         macd_values.append(macd_value)
 
         previous_close = ref_value(closes, 1)
@@ -979,6 +983,8 @@ def ultra_short_snapshots_for_code(
                 j_values,
                 rsi_values,
                 brick_values,
+                macd_dif_values,
+                macd_dea_values,
                 macd_values,
                 exists_b_values,
                 profile,
@@ -1003,6 +1009,8 @@ def ultra_short_matches_conditions(
     j_values: Sequence[float | None],
     rsi_values: Sequence[float | None],
     brick_values: Sequence[float | None],
+    macd_dif_values: Sequence[float],
+    macd_dea_values: Sequence[float],
     macd_values: Sequence[float],
     exists_b_values: Sequence[bool],
     profile: BacktestProfile,
@@ -1026,7 +1034,14 @@ def ultra_short_matches_conditions(
         rsi_values,
         brick_values,
         exists_b_values,
-    ) and ultra_short_condition2(quote, opens, highs, closes, volumes, white_lines) and is_macd_turning_red(macd_values)
+    ) and ultra_short_condition2(
+        quote,
+        opens,
+        highs,
+        closes,
+        volumes,
+        white_lines,
+    ) and is_macd_turning_red(macd_values) and is_macd_underwater(macd_dif_values, macd_dea_values)
 
 
 def ultra_short_condition1(
@@ -1711,17 +1726,33 @@ def macd_histogram(
     slow_ema: float | None,
     signal_ema: float | None,
 ) -> tuple[float, float, float, float]:
+    fast, slow, signal, _dif, histogram = macd_indicators(close, fast_ema, slow_ema, signal_ema)
+    return fast, slow, signal, histogram
+
+
+def macd_indicators(
+    close: float,
+    fast_ema: float | None,
+    slow_ema: float | None,
+    signal_ema: float | None,
+) -> tuple[float, float, float, float, float]:
     fast = ema(close, fast_ema, 12)
     slow = ema(close, slow_ema, 26)
     dif = fast - slow
     signal = ema(dif, signal_ema, 9)
-    return fast, slow, signal, (dif - signal) * 2.0
+    return fast, slow, signal, dif, (dif - signal) * 2.0
 
 
 def is_macd_turning_red(macd_values: Sequence[float]) -> bool:
     if len(macd_values) < 2:
         return False
     return macd_values[-1] > 0.0 and macd_values[-2] < 0.0
+
+
+def is_macd_underwater(macd_dif_values: Sequence[float], macd_dea_values: Sequence[float]) -> bool:
+    if not macd_dif_values or not macd_dea_values:
+        return False
+    return macd_dif_values[-1] < 0.0 and macd_dea_values[-1] < 0.0
 
 
 def quote_volume(quote: DailyQuoteIn) -> int:

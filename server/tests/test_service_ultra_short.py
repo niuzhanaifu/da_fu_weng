@@ -69,6 +69,24 @@ class UltraShortBacktestTest(unittest.TestCase):
 
         self.assertEqual(picks, [])
 
+    def test_ultra_short_requires_macd_dif_and_dea_below_zero(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        create_schema(conn)
+        dates = date_strings("2024-01-01", 130)
+        repository.upsert_daily_quotes(conn, ultra_short_quotes_with_positive_candidate_macd_dif(dates))
+
+        picks = build_backtest_picks(
+            conn,
+            start_date=dates[121],
+            end_date=dates[121],
+            indicator_ids=[],
+            holding_days=3,
+            profile=BACKTEST_PROFILES["ultra_short"],
+        )
+
+        self.assertEqual(picks, [])
+
     def test_ultra_short_backtest_uses_fixed_three_day_ten_percent_exit(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -236,6 +254,19 @@ def ultra_short_quotes_with_positive_previous_macd(dates: list[str]) -> list[Dai
             "high": previous.previous_close * 1.01,
             "low": previous.previous_close * 0.99,
             "close": close,
+        }
+    )
+    return quotes
+
+
+def ultra_short_quotes_with_positive_candidate_macd_dif(dates: list[str]) -> list[DailyQuoteIn]:
+    quotes = ultra_short_quotes(dates)
+    candidate = quotes[121]
+    close = candidate.previous_close * 1.10
+    quotes[121] = candidate.model_copy(
+        update={
+            "close": close,
+            "high": max(candidate.high, close * 1.01),
         }
     )
     return quotes
