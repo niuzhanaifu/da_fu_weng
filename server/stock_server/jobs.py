@@ -70,7 +70,7 @@ def main() -> None:
             count = upsert_daily_quotes(conn, quotes)
             print(f"imported {count} tushare quotes")
         elif args.command == "sync-tushare":
-            count = sync_tushare_quotes(conn, args.start_date, args.end_date)
+            count = sync_tushare_quotes(conn, args.start_date, args.end_date, progress=print)
             print(f"synced {count} tushare quotes")
         elif args.command == "diagnose-volume-ratio":
             diagnose_volume_ratio(conn, args.start_date, args.end_date, args.threshold, args.limit)

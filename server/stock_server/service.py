@@ -4,7 +4,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from . import repository
 from .backtest import RANK_MODE_RECENT_5DAY_CHANGE, RANK_MODE_STOP_LOSS_LOSS, rank_daily_picks, run_backtest
@@ -26,7 +26,7 @@ from .schemas import (
 )
 from .strategy import PickSnapshot
 from .strategy import select_limit_up
-from .tushare_provider import TushareError, fetch_daily_quotes_range, fetch_market_index_quotes_range
+from .tushare_provider import TushareError, fetch_daily_quote_batches, fetch_market_index_quotes_range
 
 
 DEFAULT_INDICATORS = ["volume", "seal", "close"]
@@ -400,11 +400,21 @@ def trade_stats(open_positions: Sequence[TradePositionOut], history: Sequence[Tr
     )
 
 
-def sync_tushare_quotes(conn: sqlite3.Connection, start_date: str, end_date: str) -> int:
-    quotes = fetch_daily_quotes_range(start_date, end_date)
-    if not quotes:
+def sync_tushare_quotes(
+    conn: sqlite3.Connection,
+    start_date: str,
+    end_date: str,
+    progress: Callable[[str], None] | None = None,
+) -> int:
+    count = 0
+    for trade_date, index, total, quotes in fetch_daily_quote_batches(start_date, end_date, progress=progress):
+        if not quotes:
+            continue
+        count += repository.upsert_daily_quotes(conn, quotes)
+        if progress is not None:
+            progress(f"wrote daily_quotes {index}/{total} {trade_date} rows={len(quotes)} total={count}")
+    if count <= 0:
         raise ValueError(f"No Tushare quotes found from {start_date} to {end_date}.")
-    count = repository.upsert_daily_quotes(conn, quotes)
     try:
         repository.upsert_market_index_quotes(conn, fetch_market_index_quotes_range(start_date, end_date))
     except TushareError:
