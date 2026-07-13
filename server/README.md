@@ -157,7 +157,7 @@ python -m stock_server.jobs import-tushare --date 2026-05-15
 python -m stock_server.jobs sync-tushare --start-date 2026-02-15 --end-date 2026-05-15
 ```
 
-命令说明：从 Tushare 拉取一个区间内的历史日线，并保存到本地 SQLite。同步逻辑会拉取 `trade_cal`、`daily` 和 `daily_basic`，把主板、创业板历史日线、市值等基础指标落到 SQLite。市值相关策略依赖 `daily_basic.total_mv`，历史库升级后需要重新执行一次区间同步来回填市值字段。
+命令说明：从 Tushare 拉取一个区间内的历史日线，并保存到本地 SQLite。同步逻辑会拉取 `trade_cal`、`daily`、`daily_basic` 和 `adj_factor`，按区间内每只股票最新复权因子把 open/high/low/close/VWAP 转成前复权价格，再把主板、创业板历史日线、市值等基础指标落到 SQLite。市值相关策略依赖 `daily_basic.total_mv`；历史库升级或复权口径变化后，需要重新执行一次区间同步来回填市值字段和前复权价格。
 
 清理旧的服务端选股快照：
 

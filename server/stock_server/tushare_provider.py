@@ -28,9 +28,45 @@ def fetch_daily_quotes_range(start_date: str, end_date: str) -> list[DailyQuoteI
         raise TushareError("TUSHARE_TOKEN is not configured.")
 
     basics = stock_basics(token)
+    ts_dates = open_trade_dates(token, to_tushare_date(start_date), to_tushare_date(end_date))
+    daily_payloads: list[tuple[str, list[dict[str, Any]], dict[str, dict[str, Any]]]] = []
+    adj_factors: dict[tuple[str, str], float] = {}
+    latest_adj_factor_by_code: dict[str, tuple[str, float]] = {}
     quotes: list[DailyQuoteIn] = []
-    for ts_date in open_trade_dates(token, to_tushare_date(start_date), to_tushare_date(end_date)):
-        quotes.extend(fetch_daily_quotes_for_date(token, basics, ts_date))
+    for ts_date in ts_dates:
+        daily_rows, daily_basic_by_code = fetch_daily_payload_for_date(token, ts_date)
+        daily_payloads.append((ts_date, daily_rows, daily_basic_by_code))
+        factor_rows = fetch_adj_factors_for_date(token, ts_date)
+        factor_by_code = {str(item["ts_code"]): as_float(item.get("adj_factor")) for item in factor_rows}
+        supported_daily_rows = [row for row in daily_rows if board_for_ts_code(str(row["ts_code"])) is not None]
+        factor_count = sum(1 for row in supported_daily_rows if factor_by_code.get(str(row["ts_code"]), 0.0) > 0)
+        if supported_daily_rows and factor_count < len(supported_daily_rows) * 0.8:
+            raise TushareError(
+                f"adj_factor returned too few valid rows for {from_tushare_date(ts_date)}: "
+                f"{factor_count}/{len(supported_daily_rows)}"
+            )
+        for item in factor_rows:
+            ts_code = str(item["ts_code"])
+            adj_factor = as_float(item.get("adj_factor"))
+            if adj_factor <= 0:
+                continue
+            adj_factors[(ts_code, ts_date)] = adj_factor
+            latest = latest_adj_factor_by_code.get(ts_code)
+            if latest is None or ts_date >= latest[0]:
+                latest_adj_factor_by_code[ts_code] = (ts_date, adj_factor)
+
+    for ts_date, daily_rows, daily_basic_by_code in daily_payloads:
+        quotes.extend(
+            daily_rows_to_quotes(
+                basics,
+                ts_date,
+                daily_rows,
+                daily_basic_by_code,
+                adj_factors,
+                latest_adj_factor_by_code,
+            )
+        )
+    quotes = normalize_previous_close(quotes)
 
     logger.info(
         "fetched tushare daily quotes start_date=%s end_date=%s count=%s",
@@ -69,6 +105,23 @@ def fetch_daily_quotes_for_date(
     basics: dict[str, dict[str, Any]],
     ts_date: str,
 ) -> list[DailyQuoteIn]:
+    daily_rows, daily_basic_by_code = fetch_daily_payload_for_date(token, ts_date)
+    quotes = daily_rows_to_quotes(
+        basics,
+        ts_date,
+        daily_rows,
+        daily_basic_by_code,
+        adj_factors={},
+        latest_adj_factor_by_code={},
+    )
+    logger.info("fetched tushare daily quotes trade_date=%s count=%s", from_tushare_date(ts_date), len(quotes))
+    return quotes
+
+
+def fetch_daily_payload_for_date(
+    token: str,
+    ts_date: str,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     daily_rows = call_tushare(
         token,
         "daily",
@@ -94,6 +147,17 @@ def fetch_daily_quotes_for_date(
             f"{volume_ratio_count}/{len(daily_rows)}"
         )
 
+    return daily_rows, daily_basic_by_code
+
+
+def daily_rows_to_quotes(
+    basics: dict[str, dict[str, Any]],
+    ts_date: str,
+    daily_rows: list[dict[str, Any]],
+    daily_basic_by_code: dict[str, dict[str, Any]],
+    adj_factors: dict[tuple[str, str], float],
+    latest_adj_factor_by_code: dict[str, tuple[str, float]],
+) -> list[DailyQuoteIn]:
     quotes: list[DailyQuoteIn] = []
     for row in daily_rows:
         ts_code = row["ts_code"]
@@ -101,7 +165,8 @@ def fetch_daily_quotes_for_date(
         if board is None:
             continue
 
-        close = as_float(row.get("close"))
+        multiplier = qfq_multiplier(ts_code, ts_date, adj_factors, latest_adj_factor_by_code)
+        close = adjusted_price(row.get("close"), multiplier)
         daily_basic = daily_basic_by_code.get(ts_code, {})
         stock = basics.get(ts_code, {})
         quotes.append(
@@ -111,10 +176,10 @@ def fetch_daily_quotes_for_date(
                 name=str(stock.get("name") or ts_code.split(".")[0]),
                 board=board,
                 concept=str(stock.get("industry") or ""),
-                previous_close=as_float(row.get("pre_close")),
-                open=as_float(row.get("open")),
-                high=as_float(row.get("high")),
-                low=as_float(row.get("low")),
+                previous_close=adjusted_price(row.get("pre_close"), multiplier),
+                open=adjusted_price(row.get("open"), multiplier),
+                high=adjusted_price(row.get("high"), multiplier),
+                low=adjusted_price(row.get("low"), multiplier),
                 close=close,
                 volume_ratio=as_float(daily_basic.get("volume_ratio")),
                 turnover_rate=as_float(daily_basic.get("turnover_rate")),
@@ -122,11 +187,49 @@ def fetch_daily_quotes_for_date(
                 sealed_amount_wan=0.0,
                 next_open=None,
                 future_closes=[],
-                minute_trades=daily_vwap_trade(row),
+                minute_trades=daily_vwap_trade(row, multiplier),
             )
         )
+    return quotes
 
-    logger.info("fetched tushare daily quotes trade_date=%s count=%s", from_tushare_date(ts_date), len(quotes))
+
+def fetch_adj_factors_for_date(token: str, ts_date: str) -> list[dict[str, Any]]:
+    rows = call_tushare(
+        token,
+        "adj_factor",
+        {"trade_date": ts_date},
+        "ts_code,trade_date,adj_factor",
+    )
+    if not rows:
+        raise TushareError(f"adj_factor returned no rows for {from_tushare_date(ts_date)}")
+    return rows
+
+
+def qfq_multiplier(
+    ts_code: str,
+    ts_date: str,
+    adj_factors: dict[tuple[str, str], float],
+    latest_adj_factor_by_code: dict[str, tuple[str, float]],
+) -> float:
+    adj_factor = adj_factors.get((ts_code, ts_date))
+    latest = latest_adj_factor_by_code.get(ts_code)
+    if not adj_factor or not latest or latest[1] <= 0:
+        return 1.0
+    return adj_factor / latest[1]
+
+
+def adjusted_price(raw: Any, multiplier: float) -> float:
+    return as_float(raw) * multiplier
+
+
+def normalize_previous_close(quotes: list[DailyQuoteIn]) -> list[DailyQuoteIn]:
+    sorted_quotes = sorted(quotes, key=lambda item: (item.code, item.trade_date))
+    previous_close_by_code: dict[str, float] = {}
+    for quote in sorted_quotes:
+        previous_close = previous_close_by_code.get(quote.code)
+        if previous_close is not None:
+            quote.previous_close = previous_close
+        previous_close_by_code[quote.code] = quote.close
     return quotes
 
 
@@ -266,12 +369,12 @@ def sealed_amount_wan(raw: float | None) -> float:
     return raw / 10000.0 if raw > 100000.0 else raw
 
 
-def daily_vwap_trade(row: dict[str, Any]) -> list[MinuteTrade]:
+def daily_vwap_trade(row: dict[str, Any], price_multiplier: float = 1.0) -> list[MinuteTrade]:
     volume_hands = as_float(row.get("vol"))
     amount_thousand_yuan = as_float(row.get("amount"))
     if volume_hands <= 0 or amount_thousand_yuan <= 0:
         return []
-    price = amount_thousand_yuan * 10.0 / volume_hands
+    price = amount_thousand_yuan * 10.0 / volume_hands * price_multiplier
     return [MinuteTrade(minute="daily", price=price, volume=int(volume_hands))]
 
 
