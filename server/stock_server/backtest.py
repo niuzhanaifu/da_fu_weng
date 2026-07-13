@@ -196,6 +196,7 @@ class UltraShortStrategy:
             len(pick.future_opens) < trade_holding_days
             or len(pick.future_closes) < trade_holding_days
             or len(pick.future_highs) < trade_holding_days
+            or len(pick.future_lows) < trade_holding_days
             or len(pick.future_dates) < trade_holding_days
         ):
             return None
@@ -208,19 +209,26 @@ class UltraShortStrategy:
         sell_price = pick.future_closes[trade_holding_days - 1]
         sell_index = trade_holding_days - 1
         exit_reason = "超短战法：持有3个交易日"
+        pending_buy_day_stop_loss = pick.future_lows[0] < buy_price or pick.future_closes[0] < buy_price
 
-        for index in range(trade_holding_days):
+        for index in range(1, trade_holding_days):
             high = pick.future_highs[index]
+            low = pick.future_lows[index]
             close = pick.future_closes[index]
+            if pending_buy_day_stop_loss:
+                sell_price = pick.future_opens[index]
+                sell_index = index
+                exit_reason = "超短战法：买入日跌破开盘价，次交易日止损"
+                break
             if high >= take_profit_price:
                 sell_price = take_profit_price
                 sell_index = index
                 exit_reason = "超短战法：收益达到10%止盈"
                 break
-            if close < buy_price:
+            if low < buy_price or close < buy_price:
                 sell_price = close
                 sell_index = index
-                exit_reason = "超短战法：收盘跌破买入价止损"
+                exit_reason = "超短战法：跌破开盘价止损"
                 break
 
         return BacktestTradeOut(

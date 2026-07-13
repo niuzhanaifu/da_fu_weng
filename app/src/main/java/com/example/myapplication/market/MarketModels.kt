@@ -205,7 +205,7 @@ enum class BacktestStrategy(
     UltraShort(
         id = "ultra_short",
         title = "超短战法",
-        description = "同时满足 ZXB1 砖形图共振和长阳放量条件；T+1 开盘买入，固定按 10% 止盈、3 个交易日到期或收盘跌破买入价止损。"
+        description = "同时满足 ZXB1 砖形图共振、长阳放量和 MACD 绿柱后翻红条件；T+1 开盘买入，买入当天不能卖出；固定按 10% 止盈、3 个交易日到期或跌破买入日开盘价止损。"
     )
 }
 

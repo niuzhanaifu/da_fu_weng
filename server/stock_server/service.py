@@ -32,14 +32,6 @@ from .tushare_provider import TushareError, fetch_daily_quotes_range, fetch_mark
 DEFAULT_INDICATORS = ["volume", "seal", "close"]
 FULL_DAILY_QUOTE_MIN_COUNT = 1000
 DEFAULT_SYNC_DAYS = 92
-B1_MIN_TOTAL_MV_WAN = 500000.0
-B1_MIN_HISTORY_DAYS = 114
-B1_LOOKBACK_DAYS = 180
-B1_J_THRESHOLD = 13.0
-B1_LINE_PROXIMITY_MAX = 0.035
-B1_VOLUME_PREVIOUS_RATIO_MAX = 0.85
-B1_VOLUME_AVG_RATIO_MAX = 0.75
-B1_N_SHAPE_LOOKBACK_DAYS = 60
 JIA_BAN_LOOKBACK_DAYS = 240
 JIA_BAN_MIN_HISTORY_DAYS = 120
 JIA_BAN_LINE_TOLERANCE = 0.02
@@ -158,22 +150,10 @@ BACKTEST_PROFILES: dict[str, BacktestProfile] = {
         min_history_days=OLD_CAT_LIMIT2_FIRST_BOARD_VOLUME_LOOKBACK,
         max_positions_per_day=3,
     ),
-    "b1": BacktestProfile(
-        id="b1",
-        name="B1 战法",
-        description="B1 选股：J<13，收盘价贴近知行短期线或多空线，当天相对前几日明显缩量，且日线呈 N 型上涨结构；排除 ST 和市值小于 50 亿标的；买卖规则沿用老猫战法，并按趋势线止损率排序。",
-        first_limit_only=False,
-        exclude_st=True,
-        min_total_mv_wan=B1_MIN_TOTAL_MV_WAN,
-        rank_mode=RANK_MODE_STOP_LOSS_LOSS,
-        selector="b1",
-        lookback_days=B1_LOOKBACK_DAYS,
-        min_history_days=B1_MIN_HISTORY_DAYS,
-    ),
     "ultra_short": BacktestProfile(
         id="ultra_short",
         name="超短战法",
-        description="同时满足 ZXB1 砖形图共振和长阳放量条件；T+1 开盘买入，收益达到 10% 或持有满 3 个交易日卖出，收盘跌破买入价止损；忽略 APP 量比阈值。",
+        description="同时满足 ZXB1 砖形图共振、长阳放量和 MACD 绿柱后翻红条件；T+1 开盘买入，买入当天不能卖出；收益达到 10% 或持有满 3 个交易日卖出，跌破买入日开盘价止损；忽略 APP 量比阈值。",
         first_limit_only=False,
         exclude_st=True,
         engine_strategy_id="ultra_short",
@@ -489,8 +469,6 @@ def build_backtest_picks(
     allow_below_market_ma25: bool = True,
     volume_ratio_min: float | None = None,
 ) -> list[StockPickOut]:
-    if profile is not None and profile.selector == "b1":
-        return build_b1_backtest_picks(conn, start_date, end_date, holding_days, board, profile)
     if profile is not None and profile.selector == "ultra_short":
         return build_ultra_short_backtest_picks(
             conn,
@@ -879,6 +857,7 @@ def ultra_short_snapshots_for_code(
     j_values: list[float | None] = []
     rsi_values: list[float | None] = []
     brick_values: list[float | None] = []
+    macd_values: list[float] = []
     exists_b_values: list[bool] = []
     cross_close_yellow_values: list[bool] = []
 
@@ -891,6 +870,9 @@ def ultra_short_snapshots_for_code(
     var1_sma: float | None = None
     var4_sma: float | None = None
     var5_sma: float | None = None
+    macd_fast: float | None = None
+    macd_slow: float | None = None
+    macd_signal: float | None = None
     result: list[PickSnapshot] = []
 
     for quote in sorted_quotes:
@@ -918,11 +900,19 @@ def ultra_short_snapshots_for_code(
         )
         brick_values.append(brick)
 
-        rsv = b1_rsv(closes, highs, lows, 9)
+        rsv = kdj_rsv(closes, highs, lows, 9)
         if rsv is not None:
             k_value = tdx_sma(rsv, k_value, 3, 1)
             d_value = tdx_sma(k_value, d_value, 3, 1)
         j_values.append(3.0 * k_value - 2.0 * d_value if k_value is not None and d_value is not None else None)
+
+        macd_fast, macd_slow, macd_signal, macd_value = macd_histogram(
+            quote.close,
+            macd_fast,
+            macd_slow,
+            macd_signal,
+        )
+        macd_values.append(macd_value)
 
         previous_close = ref_value(closes, 1)
         gain = max(quote.close - previous_close, 0.0) if previous_close is not None else 0.0
@@ -979,6 +969,7 @@ def ultra_short_snapshots_for_code(
                 j_values,
                 rsi_values,
                 brick_values,
+                macd_values,
                 exists_b_values,
                 profile,
             )
@@ -1002,6 +993,7 @@ def ultra_short_matches_conditions(
     j_values: Sequence[float | None],
     rsi_values: Sequence[float | None],
     brick_values: Sequence[float | None],
+    macd_values: Sequence[float],
     exists_b_values: Sequence[bool],
     profile: BacktestProfile,
 ) -> bool:
@@ -1024,7 +1016,7 @@ def ultra_short_matches_conditions(
         rsi_values,
         brick_values,
         exists_b_values,
-    ) and ultra_short_condition2(quote, opens, highs, closes, volumes, white_lines)
+    ) and ultra_short_condition2(quote, opens, highs, closes, volumes, white_lines) and is_macd_turning_red(macd_values)
 
 
 def ultra_short_condition1(
@@ -1303,7 +1295,7 @@ def ultra_short_exists_b(
         and (shrink or (moderate_shrink and daily_change < 1.0))
         and (recent_anomaly or far_anomaly or wash_anomaly)
     )
-    original_b1 = (
+    original_shrink_signal = (
         white_line > yellow_line
         and quote.close >= yellow_line * 0.99
         and yellow_line >= previous_yellow
@@ -1379,7 +1371,7 @@ def ultra_short_exists_b(
     return (
         oversold_shrink_turn_b
         or oversold_shrink_b
-        or original_b1
+        or original_shrink_signal
         or oversold_super_shrink_b
         or pullback_white_b
         or pullback_super_b
@@ -1675,128 +1667,7 @@ def is_last_llv(values: Sequence[float | None], window: int) -> bool:
     return current is not None and lowest is not None and current <= lowest + 1e-9
 
 
-def build_b1_backtest_picks(
-    conn: sqlite3.Connection,
-    start_date: str | None,
-    end_date: str | None,
-    holding_days: int,
-    board: str | None,
-    profile: BacktestProfile,
-) -> list[StockPickOut]:
-    quotes_by_code: dict[str, list[DailyQuoteIn]] = {}
-    for trade_date in repository.quote_dates_on_or_before(conn, end_date):
-        for quote in repository.load_quotes(conn, trade_date):
-            if board and quote.board.value != board:
-                continue
-            quotes_by_code.setdefault(quote.code, []).append(quote)
-
-    snapshots: list[PickSnapshot] = []
-    for quotes in quotes_by_code.values():
-        snapshots.extend(b1_snapshots_for_code(quotes, start_date, end_date, profile))
-
-    snapshots.sort(key=lambda item: (item.trade_date, item.board.value, item.code))
-    return [snapshot_to_pick(conn, snapshot, holding_days) for snapshot in snapshots]
-
-
-def b1_snapshots_for_code(
-    quotes: Sequence[DailyQuoteIn],
-    start_date: str | None,
-    end_date: str | None,
-    profile: BacktestProfile,
-) -> list[PickSnapshot]:
-    sorted_quotes = sorted(quotes, key=lambda item: item.trade_date)
-    closes: list[float] = []
-    highs: list[float] = []
-    lows: list[float] = []
-    volumes: list[int] = []
-    ema10: float | None = None
-    zxdq: float | None = None
-    k_value: float | None = None
-    d_value: float | None = None
-    result: list[PickSnapshot] = []
-
-    for quote in sorted_quotes:
-        closes.append(quote.close)
-        highs.append(quote.high)
-        lows.append(quote.low)
-
-        ema10 = ema(quote.close, ema10, 10)
-        zxdq = ema(ema10, zxdq, 10)
-
-        rsv = b1_rsv(closes, highs, lows, 9)
-        if rsv is not None:
-            k_value = tdx_sma(rsv, k_value, 3, 1)
-            d_value = tdx_sma(k_value, d_value, 3, 1)
-
-        current_volume = quote_volume(quote)
-        recent_volumes = volumes[-5:]
-        if (
-            in_date_range(quote.trade_date, start_date, end_date)
-            and len(closes) >= B1_MIN_HISTORY_DAYS
-            and k_value is not None
-            and d_value is not None
-            and zxdq is not None
-            and matches_b1_conditions(quote, closes, zxdq, k_value, d_value, recent_volumes, current_volume, profile)
-        ):
-            zxdkx = b1_zxdkx(closes)
-            if zxdkx is not None:
-                result.append(b1_snapshot(quote, zxdq, zxdkx))
-
-        volumes.append(current_volume)
-
-    return result
-
-
-def matches_b1_conditions(
-    quote: DailyQuoteIn,
-    closes: Sequence[float],
-    zxdq: float,
-    k_value: float,
-    d_value: float,
-    recent_volumes: Sequence[int],
-    current_volume: int,
-    profile: BacktestProfile,
-) -> bool:
-    if quote.board not in (MarketBoard.main, MarketBoard.chinext):
-        return False
-    if profile.exclude_st and is_st_stock(quote.name):
-        return False
-    if profile.min_total_mv_wan is not None and quote.total_mv_wan < profile.min_total_mv_wan:
-        return False
-    zxdkx = b1_zxdkx(closes)
-    if zxdkx is None:
-        return False
-    j_value = 3.0 * k_value - 2.0 * d_value
-    return (
-        j_value < B1_J_THRESHOLD
-        and is_price_near_b1_line(quote.close, zxdq, zxdkx)
-        and is_significant_shrinking_volume(quote, recent_volumes, current_volume)
-        and has_n_shape_uptrend(closes)
-    )
-
-
-def b1_snapshot(quote: DailyQuoteIn, zxdq: float, zxdkx: float) -> PickSnapshot:
-    return PickSnapshot(
-        trade_date=quote.trade_date,
-        code=quote.code,
-        name=quote.name,
-        board=quote.board,
-        concept=quote.concept,
-        close=quote.close,
-        change_percent=(quote.close - quote.previous_close) / quote.previous_close * 100.0 if quote.previous_close > 0 else 0.0,
-        volume_ratio=quote.volume_ratio,
-        turnover_rate=quote.turnover_rate,
-        total_mv_wan=quote.total_mv_wan,
-        sealed_amount_wan=quote.sealed_amount_wan,
-        stop_loss_price=b1_stop_loss_price(quote.close, zxdq, zxdkx),
-        limit_shape="b1",
-        limit_shape_label="B1选股",
-        next_open=quote.next_open,
-        future_closes=quote.future_closes,
-    )
-
-
-def b1_rsv(closes: Sequence[float], highs: Sequence[float], lows: Sequence[float], n: int) -> float | None:
+def kdj_rsv(closes: Sequence[float], highs: Sequence[float], lows: Sequence[float], n: int) -> float | None:
     if len(closes) < n:
         return None
     highest = max(highs[-n:])
@@ -1805,13 +1676,6 @@ def b1_rsv(closes: Sequence[float], highs: Sequence[float], lows: Sequence[float
     if rng == 0:
         return 50.0
     return (closes[-1] - lowest) / rng * 100.0
-
-
-def b1_zxdkx(closes: Sequence[float]) -> float | None:
-    windows = [14, 28, 57, B1_MIN_HISTORY_DAYS]
-    if len(closes) < max(windows):
-        return None
-    return sum(simple_ma(closes, window) for window in windows) / len(windows)
 
 
 def simple_ma(values: Sequence[float], window: int) -> float:
@@ -1831,60 +1695,27 @@ def tdx_sma(value: float, previous: float | None, period: int, weight: int) -> f
     return (weight * value + (period - weight) * previous) / period
 
 
+def macd_histogram(
+    close: float,
+    fast_ema: float | None,
+    slow_ema: float | None,
+    signal_ema: float | None,
+) -> tuple[float, float, float, float]:
+    fast = ema(close, fast_ema, 12)
+    slow = ema(close, slow_ema, 26)
+    dif = fast - slow
+    signal = ema(dif, signal_ema, 9)
+    return fast, slow, signal, (dif - signal) * 2.0
+
+
+def is_macd_turning_red(macd_values: Sequence[float]) -> bool:
+    if len(macd_values) < 2:
+        return False
+    return macd_values[-1] > 0.0 and macd_values[-2] < 0.0
+
+
 def quote_volume(quote: DailyQuoteIn) -> int:
     return sum(max(0, trade.volume) for trade in quote.minute_trades)
-
-
-def is_price_near_b1_line(close: float, zxdq: float, zxdkx: float) -> bool:
-    return any(is_price_near_support_line(close, line) for line in (zxdq, zxdkx))
-
-
-def is_price_near_support_line(close: float, line: float) -> bool:
-    if close <= 0.0 or line <= 0.0:
-        return False
-    return line <= close <= line * (1.0 + B1_LINE_PROXIMITY_MAX)
-
-
-def is_significant_shrinking_volume(quote: DailyQuoteIn, recent_volumes: Sequence[int], current_volume: int) -> bool:
-    valid_volumes = [volume for volume in recent_volumes if volume > 0]
-    if current_volume > 0 and valid_volumes:
-        previous_volume = valid_volumes[-1]
-        if current_volume > previous_volume * B1_VOLUME_PREVIOUS_RATIO_MAX:
-            return False
-        if len(valid_volumes) >= 3:
-            average_volume = sum(valid_volumes) / len(valid_volumes)
-            return current_volume <= average_volume * B1_VOLUME_AVG_RATIO_MAX
-        return True
-    return 0.0 < quote.volume_ratio <= B1_VOLUME_AVG_RATIO_MAX
-
-
-def has_n_shape_uptrend(closes: Sequence[float]) -> bool:
-    if len(closes) < B1_N_SHAPE_LOOKBACK_DAYS:
-        return False
-    recent_closes = closes[-20:]
-    prior_closes = closes[-B1_N_SHAPE_LOOKBACK_DAYS:-20]
-    if not recent_closes or not prior_closes:
-        return False
-
-    current_ma20 = simple_ma(closes, 20)
-    current_ma60 = simple_ma(closes, B1_N_SHAPE_LOOKBACK_DAYS)
-    previous_ma60 = simple_ma(closes[:-20], B1_N_SHAPE_LOOKBACK_DAYS)
-    if current_ma20 <= current_ma60 or current_ma60 <= previous_ma60:
-        return False
-
-    prior_low = min(prior_closes)
-    prior_high = max(prior_closes)
-    recent_low = min(recent_closes)
-    recent_high = max(recent_closes)
-    return recent_low >= prior_low * 1.03 and recent_high >= prior_high * 0.98
-
-
-def b1_stop_loss_price(close: float, zxdq: float, zxdkx: float) -> float:
-    valid_lines = [line for line in (zxdq, zxdkx) if 0.0 < line < close]
-    if valid_lines:
-        return max(valid_lines)
-    fallback_lines = [line for line in (zxdq, zxdkx) if line > 0.0]
-    return min(fallback_lines) if fallback_lines else close
 
 
 def in_date_range(trade_date: str, start_date: str | None, end_date: str | None) -> bool:

@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from stock_server import repository
-from stock_server.schemas import BacktestRequest, DailyQuoteIn, MarketBoard, MinuteTrade
+from stock_server.backtest import run_backtest
+from stock_server.schemas import BacktestRequest, DailyQuoteIn, MarketBoard, MinuteTrade, StockPickOut
 from stock_server.service import BACKTEST_PROFILES, build_backtest_picks, run_saved_backtest
 
 
@@ -50,6 +51,24 @@ class UltraShortBacktestTest(unittest.TestCase):
 
         self.assertEqual(picks, [])
 
+    def test_ultra_short_requires_previous_day_macd_green_before_turning_red(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        create_schema(conn)
+        dates = date_strings("2024-01-01", 130)
+        repository.upsert_daily_quotes(conn, ultra_short_quotes_with_positive_previous_macd(dates))
+
+        picks = build_backtest_picks(
+            conn,
+            start_date=dates[121],
+            end_date=dates[121],
+            indicator_ids=[],
+            holding_days=3,
+            profile=BACKTEST_PROFILES["ultra_short"],
+        )
+
+        self.assertEqual(picks, [])
+
     def test_ultra_short_backtest_uses_fixed_three_day_ten_percent_exit(self):
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -76,6 +95,51 @@ class UltraShortBacktestTest(unittest.TestCase):
         self.assertEqual(trade.sell_date, dates[124])
         self.assertIn("收益达到10%止盈", trade.exit_reason)
         self.assertAlmostEqual(trade.return_percent, 10.0, places=6)
+
+    def test_ultra_short_buy_day_stop_loss_sells_next_trading_day_open(self):
+        pick = stock_pick(
+            future_opens=[10.0, 9.7, 9.5],
+            future_highs=[10.2, 9.9, 9.8],
+            future_lows=[9.8, 9.4, 9.3],
+            future_closes=[9.9, 9.5, 9.4],
+        )
+
+        result = run_backtest(
+            [pick],
+            holding_days=3,
+            take_profit_percent=10.0,
+            strategy_id="ultra_short",
+        )
+
+        self.assertEqual(result.total_trades, 1)
+        trade = result.trades[0]
+        self.assertEqual(trade.buy_date, "2024-05-13")
+        self.assertEqual(trade.sell_date, "2024-05-14")
+        self.assertEqual(trade.sell_price, 9.7)
+        self.assertEqual(trade.stop_loss_price, 10.0)
+        self.assertIn("次交易日止损", trade.exit_reason)
+
+    def test_ultra_short_ignores_buy_day_take_profit_signal(self):
+        pick = stock_pick(
+            future_opens=[10.0, 10.2, 10.1],
+            future_highs=[11.3, 10.6, 10.4],
+            future_lows=[10.0, 10.0, 10.0],
+            future_closes=[10.8, 10.4, 10.2],
+        )
+
+        result = run_backtest(
+            [pick],
+            holding_days=3,
+            take_profit_percent=10.0,
+            strategy_id="ultra_short",
+        )
+
+        self.assertEqual(result.total_trades, 1)
+        trade = result.trades[0]
+        self.assertEqual(trade.buy_date, "2024-05-13")
+        self.assertEqual(trade.sell_date, "2024-05-15")
+        self.assertEqual(trade.sell_price, 10.2)
+        self.assertIn("持有3个交易日", trade.exit_reason)
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
@@ -153,10 +217,27 @@ def ultra_short_quotes(dates: list[str], candidate_volume: int = 4739) -> list[D
             close = open_price * random_source.uniform(0.98, 1.08)
             high = max(open_price, close) * 1.02
             low = min(open_price, close) * 0.98
+            if index == 122:
+                low = open_price
             volume = random_source.randint(900, 1800)
             turnover_rate = 2.0
         quotes.append(quote(trade_date, previous_close, open_price, high, low, close, volume, turnover_rate))
         previous_close = close
+    return quotes
+
+
+def ultra_short_quotes_with_positive_previous_macd(dates: list[str]) -> list[DailyQuoteIn]:
+    quotes = ultra_short_quotes(dates)
+    previous = quotes[120]
+    close = previous.previous_close
+    quotes[120] = previous.model_copy(
+        update={
+            "open": previous.previous_close,
+            "high": previous.previous_close * 1.01,
+            "low": previous.previous_close * 0.99,
+            "close": close,
+        }
+    )
     return quotes
 
 
@@ -185,6 +266,38 @@ def quote(
         total_mv_wan=100000.0,
         sealed_amount_wan=0.0,
         minute_trades=[MinuteTrade(minute="daily", price=close, volume=volume)],
+    )
+
+
+def stock_pick(
+    future_opens: list[float],
+    future_highs: list[float],
+    future_lows: list[float],
+    future_closes: list[float],
+) -> StockPickOut:
+    return StockPickOut(
+        trade_date="2024-05-10",
+        code="600001",
+        name="Sample Equity",
+        board=MarketBoard.main,
+        board_label="主板",
+        concept="",
+        close=9.8,
+        change_percent=0.0,
+        volume_ratio=0.1,
+        turnover_rate=2.0,
+        total_mv_wan=100000.0,
+        sealed_amount_wan=0.0,
+        stop_loss_price=0.0,
+        next_open=future_opens[0],
+        future_closes=future_closes,
+        future_highs=future_highs,
+        future_lows=future_lows,
+        future_opens=future_opens,
+        future_dates=["2024-05-13", "2024-05-14", "2024-05-15"],
+        recent_3day_change_percent=0.0,
+        recent_5day_change_percent=0.0,
+        minute_trades=[],
     )
 
 

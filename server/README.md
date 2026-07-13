@@ -268,6 +268,6 @@ APP 触发 `/api/v1/backtests/experiments` 时，服务端只跑老猫战法和�
 - `old_cat`：正式老猫战法，首板、早上封板、非 ST、非一字板；超过 3 只时按最近 5 个交易日累计涨幅最低优先买入。
 - `old_cat_selection_aligned`：老猫对照：选股口径对齐。T 日首板早上封板、非 ST、非一字板；按 T+1 收盘相对 T 日收盘涨幅不超过 5% 过滤；T+2 开盘价买入。
 
-B1 战法保留单独回测入口，不参与策略对比实验。
+超短战法保留单独回测入口，不参与策略对比实验。
 `old_cat_timely_stop_loss` 保留为内部回测策略，不参与策略对比实验。
 `old_cat_selection_aligned_8pct`、`old_cat_stop_loss_rank`、`jia_ban` 和 `old_cat_limit2` 保留单独回测入口，不参与策略对比实验。

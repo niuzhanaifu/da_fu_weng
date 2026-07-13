@@ -374,7 +374,6 @@ class OldCatSelectionTest(unittest.TestCase):
         self.assertNotIn("old_cat_afternoon_limit", strategy_ids)
         self.assertNotIn("old_cat_selection_aligned_8pct", strategy_ids)
         self.assertNotIn("old_cat_stop_loss_rank", strategy_ids)
-        self.assertNotIn("b1", strategy_ids)
         self.assertNotIn("old_cat_timely_stop_loss", strategy_ids)
         self.assertNotIn("jia_ban", strategy_ids)
         self.assertNotIn("old_cat_limit2", strategy_ids)
